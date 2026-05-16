@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Gradispace</title>
+<link rel="stylesheet" href="/public/css/main.css">
+</head>
+<body class="app-page">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">Gradispace</div>
+  <nav class="sidebar-nav">
+    <a href="/teacher/dashboard.html" class="snav active">Dashboard</a>
+    <a href="/teacher/exams.html"     class="snav">Exams</a>
+    <a href="/teacher/builder.html"   class="snav">Exam Builder</a>
+    <a href="/teacher/qbank.html"     class="snav">Question Bank</a>
+    <a href="/teacher/results.html"   class="snav">Results</a>
+    <a href="/teacher/analytics.html" class="snav">Analytics</a>
+    <a href="/teacher/billing.html"   class="snav">Billing</a>
+    <a href="/teacher/settings.html"  class="snav">Settings</a>
+  </nav>
+  <button class="sidebar-logout" onclick="logout()">Sign Out</button>
+</aside>
+
+<main class="app-main">
+  <div class="app-topbar">
+    <h1 class="app-title">Dashboard</h1>
+    <div id="planBadge" class="plan-badge">Free</div>
+  </div>
+
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card" id="sc-exams">  <div class="sc-val">—</div><div class="sc-lbl">Exams</div></div>
+    <div class="stat-card" id="sc-bank">   <div class="sc-val">—</div><div class="sc-lbl">Question Bank</div></div>
+    <div class="stat-card" id="sc-results"><div class="sc-val">—</div><div class="sc-lbl">Submissions</div></div>
+    <div class="stat-card" id="sc-ai">     <div class="sc-val">—</div><div class="sc-lbl">AI Generations (this month)</div></div>
+  </div>
+
+  <div class="quick-actions">
+    <a href="/teacher/builder.html" class="qa-btn">+ New Exam</a>
+    <a href="/teacher/qbank.html"   class="qa-btn secondary">Browse Question Bank</a>
+    <a href="/teacher/results.html" class="qa-btn secondary">View Results</a>
+  </div>
+</main>
+
+<script src="/public/js/api.js"></script>
+<script>
+  async function init() {
+    try {
+      const teacher = await API.get('/auth/me');
+      document.getElementById('planBadge').textContent = teacher.plan.charAt(0).toUpperCase() + teacher.plan.slice(1);
+      document.getElementById('sc-ai').querySelector('.sc-val').textContent =
+        teacher.ai_usage_month + (teacher.plan === 'free' ? '/10' : '');
+
+      const [examsRes, bankRes, resultsRes] = await Promise.all([
+        API.get('/exams?limit=1'),
+        API.get('/questions?limit=1'),
+        API.get('/results?limit=1'),
+      ]);
+      document.getElementById('sc-exams').querySelector('.sc-val').textContent   = examsRes.total;
+      document.getElementById('sc-bank').querySelector('.sc-val').textContent    = bankRes.total;
+      document.getElementById('sc-results').querySelector('.sc-val').textContent = resultsRes.total;
+    } catch (e) {
+      if (e.status === 401) window.location.href = '/teacher/login.html';
+    }
+  }
+
+  function logout() { API.clearToken(); window.location.href = '/teacher/login.html'; }
+  init();
+</script>
+</body>
+</html>

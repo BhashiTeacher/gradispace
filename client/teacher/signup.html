@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Up — Gradispace</title>
+<link rel="stylesheet" href="/public/css/main.css">
+</head>
+<body class="auth-page">
+<div class="auth-card">
+  <div class="auth-logo">Gradispace</div>
+  <h2>Create your account</h2>
+  <p class="auth-sub">Free forever. No credit card required.</p>
+  <div class="form-group">
+    <label>Full Name</label>
+    <input type="text" id="name" placeholder="Mrs. Smith" autocomplete="name">
+  </div>
+  <div class="form-group">
+    <label>Email</label>
+    <input type="email" id="email" placeholder="you@school.com" autocomplete="email">
+  </div>
+  <div class="form-group">
+    <label>Password <span style="font-weight:400;color:#888;">(min 8 characters)</span></label>
+    <input type="password" id="password" placeholder="••••••••" autocomplete="new-password">
+  </div>
+  <div class="field-error" id="err"></div>
+  <button class="btn-primary" id="signupBtn" onclick="doSignup()">Create Account</button>
+  <div class="auth-links">
+    Already have an account? <a href="/teacher/login.html">Sign in</a>
+  </div>
+</div>
+<script src="/public/js/api.js"></script>
+<script>
+  async function doSignup() {
+    const btn = document.getElementById('signupBtn');
+    const err = document.getElementById('err');
+    err.textContent = '';
+    btn.disabled = true; btn.textContent = 'Creating account…';
+    try {
+      const { token } = await API.post('/auth/signup', {
+        name:     document.getElementById('name').value.trim(),
+        email:    document.getElementById('email').value.trim(),
+        password: document.getElementById('password').value,
+      });
+      API.setToken(token);
+      window.location.href = '/teacher/dashboard.html';
+    } catch (e) {
+      err.textContent = e.message;
+      btn.disabled = false; btn.textContent = 'Create Account';
+    }
+  }
+</script>
+</body>
+</html>

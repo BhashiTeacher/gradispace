@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Gradispace</title>
+<link rel="stylesheet" href="/public/css/main.css">
+</head>
+<body class="auth-page">
+<div class="auth-card">
+  <div class="auth-logo">Gradispace</div>
+  <h2>Welcome back</h2>
+  <p class="auth-sub">Sign in to your teacher account</p>
+  <div class="form-group">
+    <label>Email</label>
+    <input type="email" id="email" placeholder="you@school.com" autocomplete="email">
+  </div>
+  <div class="form-group">
+    <label>Password</label>
+    <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+  </div>
+  <div class="field-error" id="err"></div>
+  <button class="btn-primary" id="loginBtn" onclick="doLogin()">Sign In</button>
+  <div class="auth-links">
+    <a href="/teacher/forgot.html">Forgot password?</a>
+    <span>·</span>
+    <a href="/teacher/signup.html">Create account</a>
+  </div>
+</div>
+<script src="/public/js/api.js"></script>
+<script>
+  if (API.getToken()) window.location.href = '/teacher/dashboard.html';
+
+  async function doLogin() {
+    const btn = document.getElementById('loginBtn');
+    const err = document.getElementById('err');
+    err.textContent = '';
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const { token } = await API.post('/auth/login', {
+        email: document.getElementById('email').value.trim(),
+        password: document.getElementById('password').value,
+      });
+      API.setToken(token);
+      window.location.href = '/teacher/dashboard.html';
+    } catch (e) {
+      err.textContent = e.message;
+      btn.disabled = false; btn.textContent = 'Sign In';
+    }
+  }
+
+  document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+</script>
+</body>
+</html>

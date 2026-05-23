@@ -22,8 +22,18 @@ import Settings    from './pages/settings/Settings';
 import ExamPage  from './pages/student/ExamPage';
 import GroupPage from './pages/student/GroupPage';
 
+// Landing
+import Landing from './pages/Landing';
+
 // 404
 import NotFound from './pages/NotFound';
+
+function LandingRoute() {
+  const { teacher, loading } = useAuth();
+  if (loading) return <PageSpinner />;
+  if (teacher) return <Navigate to="/dashboard" replace />;
+  return <Landing />;
+}
 
 function RequireAuth({ children }) {
   const { teacher, loading } = useAuth();
@@ -43,8 +53,8 @@ function RequireGuest({ children }) {
 export default function App() {
   return (
     <Routes>
-      {/* Root redirect */}
-      <Route index element={<Navigate to="/dashboard" replace />} />
+      {/* Landing page — public; redirects to /dashboard if already logged in */}
+      <Route index element={<LandingRoute />} />
 
       {/* Guest-only auth routes */}
       <Route path="/login"            element={<RequireGuest><Login /></RequireGuest>} />

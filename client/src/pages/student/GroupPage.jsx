@@ -3,7 +3,8 @@ import { useParams } from 'react-router-dom';
 import { ClockIcon, DocumentTextIcon, ExclamationCircleIcon, AcademicCapIcon } from '@heroicons/react/24/outline';
 import Spinner from '../../components/UI/Spinner';
 
-const BASE = import.meta.env.VITE_API_URL || '/api/v1';
+const _apiHost = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '').replace(/\/api\/v1$/, '');
+const BASE = _apiHost ? `${_apiHost}/api/v1` : '/api/v1';
 
 async function sGet(path) {
   const res  = await fetch(`${BASE}${path}`);

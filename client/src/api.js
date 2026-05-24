@@ -1,7 +1,10 @@
 // Central API client — all requests go through here.
 // JWT is read from localStorage on every call so it's always fresh.
 
-const BASE = import.meta.env.VITE_API_URL || '/api/v1';
+// Normalise: strip trailing slash + any accidental /api/v1 suffix, then re-add it.
+// This makes VITE_API_URL tolerant of both "https://host" and "https://host/api/v1".
+const _apiHost = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '').replace(/\/api\/v1$/, '');
+const BASE = _apiHost ? `${_apiHost}/api/v1` : '/api/v1';
 
 function getToken() {
   return localStorage.getItem('gs_token');

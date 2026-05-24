@@ -23,7 +23,9 @@ async function request(method, path, body, isFormData = false) {
     body: isFormData ? body : body ? JSON.stringify(body) : undefined,
   });
 
-  if (res.status === 401) {
+  // 401 with an active token = session expired → clear and redirect.
+  // 401 without a token = credential failure on /auth/login → let json() throw.
+  if (res.status === 401 && getToken()) {
     localStorage.removeItem('gs_token');
     window.location.href = '/login';
     return null;

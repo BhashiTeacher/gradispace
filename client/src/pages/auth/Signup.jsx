@@ -45,6 +45,7 @@ export default function Signup() {
         email:    form.email.trim().toLowerCase(),
         password: form.password,
       });
+      if (!data) return;
       login(data.token, data.teacher);
       navigate('/dashboard', { replace: true });
     } catch (err) {

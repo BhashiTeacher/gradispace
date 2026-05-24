@@ -34,6 +34,7 @@ export default function Login() {
         email: form.email.trim().toLowerCase(),
         password: form.password,
       });
+      if (!data) return;
       login(data.token, data.teacher);
       navigate(from, { replace: true });
     } catch (err) {

@@ -311,8 +311,8 @@ export default function Dashboard() {
           icon={SparklesIcon}
           label="AI Generations"
           value={
-            teacher
-              ? `${teacher.aiUsage.used} / ${teacher.aiUsage.limit ?? '∞'}`
+            teacher?.aiUsage
+              ? `${teacher.aiUsage.used} / ${teacher.aiUsage.limit != null ? teacher.aiUsage.limit : '∞'}`
               : <Skeleton className="h-7 w-16" />
           }
           sub="This calendar month"

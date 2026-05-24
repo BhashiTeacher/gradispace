@@ -4,6 +4,7 @@ const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db      = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { LIMITS }      = require('../middleware/plan');
 const { sendPasswordReset, sendWelcome } = require('../lib/email');
 
 function signToken(teacher) {
@@ -58,12 +59,39 @@ router.post('/login', async (req, res, next) => {
 // GET /api/v1/auth/me
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const { rows } = await db.query(
-      'SELECT id,name,email,plan,plan_status,ai_usage_month,ai_usage_reset_at,created_at FROM teachers WHERE id=$1',
-      [req.teacherId]
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
-    res.json(rows[0]);
+    const [teacherRes, examRes, bankRes, subRes] = await Promise.all([
+      db.query(
+        'SELECT id,name,email,plan,plan_status,ai_usage_month,created_at FROM teachers WHERE id=$1',
+        [req.teacherId]
+      ),
+      db.query('SELECT COUNT(*) FROM exams WHERE teacher_id=$1', [req.teacherId]),
+      db.query('SELECT COUNT(*) FROM questions WHERE teacher_id=$1 AND in_bank=true', [req.teacherId]),
+      db.query(
+        'SELECT COUNT(*) FROM submissions s JOIN exams e ON s.exam_id=e.id WHERE e.teacher_id=$1 AND s.submitted_at IS NOT NULL',
+        [req.teacherId]
+      ),
+    ]);
+
+    const t = teacherRes.rows[0];
+    if (!t) return res.status(404).json({ error: 'not_found' });
+
+    const limits = LIMITS[t.plan] || LIMITS.free;
+
+    res.json({
+      id:                t.id,
+      name:              t.name,
+      email:             t.email,
+      plan:              t.plan,
+      plan_status:       t.plan_status,
+      created_at:        t.created_at,
+      examCount:         parseInt(examRes.rows[0].count),
+      questionBankCount: parseInt(bankRes.rows[0].count),
+      submissionCount:   parseInt(subRes.rows[0].count),
+      aiUsage: {
+        used:  t.ai_usage_month,
+        limit: limits.aiPerMonth,
+      },
+    });
   } catch (err) { next(err); }
 });
 

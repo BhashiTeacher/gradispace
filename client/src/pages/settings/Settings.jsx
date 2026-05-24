@@ -92,7 +92,7 @@ function BrandingPreview({ form, teacher }) {
 
 // ── Image upload field ────────────────────────────────────────────────────────
 function ImageUploadField({ label, value, endpoint, accept, hint, isPro, onUploaded, navigate }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const inputRef  = useRef(null);
   const [uploading, setUploading] = useState(false);
 
@@ -145,7 +145,7 @@ function ImageUploadField({ label, value, endpoint, accept, hint, isPro, onUploa
 
 // ── Change password form ──────────────────────────────────────────────────────
 function ChangePasswordForm() {
-  const { toast } = useToast();
+  const toast = useToast();
   const [current, setCurrent]   = useState('');
   const [next, setNext]         = useState('');
   const [confirm, setConfirm]   = useState('');
@@ -167,7 +167,7 @@ function ChangePasswordForm() {
       toast('Password updated.', 'success');
       setCurrent(''); setNext(''); setConfirm('');
     } catch (err) {
-      if (err.status === 401) setErrors({ current: 'Current password is incorrect.' });
+      if (err.code === 'wrong_password') setErrors({ current: 'Current password is incorrect.' });
       else toast(err.message || 'Failed to update password.', 'error');
     } finally {
       setSaving(false);
@@ -205,7 +205,7 @@ function ChangePasswordForm() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Settings() {
   const { teacher, isPro, logout } = useAuth();
-  const { toast } = useToast();
+  const toast = useToast();
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);

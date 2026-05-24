@@ -132,4 +132,37 @@ router.post('/reset-password', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// PUT /api/v1/auth/password  — change password (requires current password)
+router.put('/password', requireAuth, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'validation_error', message: 'currentPassword and newPassword are required.' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'validation_error', message: 'New password must be at least 8 characters.' });
+    }
+
+    const { rows } = await db.query('SELECT password_hash FROM teachers WHERE id=$1', [req.teacherId]);
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+
+    const correct = await bcrypt.compare(currentPassword, rows[0].password_hash);
+    if (!correct) {
+      return res.status(400).json({ error: 'wrong_password', message: 'Current password is incorrect.' });
+    }
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await db.query('UPDATE teachers SET password_hash=$1, updated_at=NOW() WHERE id=$2', [hash, req.teacherId]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/v1/auth/account
+router.delete('/account', requireAuth, async (req, res, next) => {
+  try {
+    await db.query('DELETE FROM teachers WHERE id=$1', [req.teacherId]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

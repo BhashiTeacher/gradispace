@@ -3,16 +3,32 @@ const express     = require('express');
 const cors        = require('cors');
 const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
-const path        = require('path');
 
 const app = express();
 
-// ── Security ────────────────────────────────────────────────────
-app.use(helmet({ contentSecurityPolicy: false }));
+// ── CORS ─────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = new Set([
+  'https://gradispace.com',
+  'https://www.gradispace.com',
+  'https://gradispace.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+]);
+// Also accept whatever CLIENT_URL is set to in the environment
+if (process.env.CLIENT_URL) ALLOWED_ORIGINS.add(process.env.CLIENT_URL);
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || '*',
+  origin(origin, cb) {
+    // Allow non-browser clients (curl, mobile, same-origin) that send no Origin header
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    cb(Object.assign(new Error(`CORS: origin not allowed — ${origin}`), { status: 403 }));
+  },
   credentials: true,
 }));
+
+// ── Security headers ─────────────────────────────────────────────
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // ── Stripe webhook needs raw body — mount BEFORE json() ─────────
 const billingRoutes = require('./routes/billing');
@@ -42,18 +58,20 @@ app.use('/api/v1/settings',  require('./routes/settings'));
 // ── Health check ────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-// ── Serve frontend in production ─────────────────────────────────
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../../client')));
-  app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../../client/index.html')));
-}
+// ── 404 for unmatched API routes ─────────────────────────────────
+// Must be before the error handler so stray /api/* paths return JSON,
+// not an HTML page (frontend is on Vercel — no static files here).
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'not_found', message: 'API endpoint not found.' });
+});
 
 // ── Global error handler ─────────────────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error(err);
-  res.status(err.status || 500).json({
-    error: err.code || 'server_error',
-    message: process.env.NODE_ENV === 'production' ? 'Something went wrong.' : err.message,
+  const status = err.status || 500;
+  res.status(status).json({
+    error:   err.code    || 'server_error',
+    message: status < 500 ? err.message : (process.env.NODE_ENV === 'production' ? 'Something went wrong.' : err.message),
   });
 });
 

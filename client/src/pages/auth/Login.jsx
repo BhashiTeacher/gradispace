@@ -38,7 +38,7 @@ export default function Login() {
       navigate(from, { replace: true });
     } catch (err) {
       if (err.status === 401) {
-        setErrors({ password: 'Invalid email or password.' });
+        setErrors({ password: 'Invalid email or password. Please try again.' });
       } else {
         toast(err.message, 'error');
       }

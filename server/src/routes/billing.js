@@ -1,7 +1,19 @@
 const router = require('express').Router();
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db     = require('../db');
 const { requireAuth } = require('../middleware/auth');
+
+// Stripe is optional at startup — only needed when billing routes are called.
+// Lazy-init so a missing key doesn't crash the server on boot.
+let _stripe = null;
+function getStripe() {
+  if (!_stripe) {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      throw Object.assign(new Error('Billing not configured (STRIPE_SECRET_KEY missing).'), { status: 503 });
+    }
+    _stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+  }
+  return _stripe;
+}
 
 const PLANS = [
   { id: 'free',   name: 'Free',   price: 0,  currency: 'usd', interval: null,    stripePriceId: null },
@@ -21,7 +33,7 @@ router.get('/subscription', requireAuth, async (req, res, next) => {
 
     let sub = null;
     if (t.stripe_sub_id) {
-      sub = await stripe.subscriptions.retrieve(t.stripe_sub_id).catch(() => null);
+      sub = await getStripe().subscriptions.retrieve(t.stripe_sub_id).catch(() => null);
     }
     res.json({
       plan: t.plan,
@@ -44,12 +56,12 @@ router.post('/checkout', requireAuth, async (req, res, next) => {
 
     let customerId = teacher.stripe_customer_id;
     if (!customerId) {
-      const customer = await stripe.customers.create({ email: teacher.email, name: teacher.name, metadata: { teacherId: req.teacherId } });
+      const customer = await getStripe().customers.create({ email: teacher.email, name: teacher.name, metadata: { teacherId: req.teacherId } });
       customerId = customer.id;
       await db.query('UPDATE teachers SET stripe_customer_id=$1 WHERE id=$2', [customerId, req.teacherId]);
     }
 
-    const session = await stripe.checkout.sessions.create({
+    const session = await getStripe().checkout.sessions.create({
       customer: customerId,
       payment_method_types: ['card'],
       mode: 'subscription',
@@ -67,7 +79,7 @@ router.post('/portal', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await db.query('SELECT stripe_customer_id FROM teachers WHERE id=$1', [req.teacherId]);
     if (!rows[0]?.stripe_customer_id) return res.status(400).json({ error: 'validation_error', message: 'No active subscription.' });
-    const session = await stripe.billingPortal.sessions.create({
+    const session = await getStripe().billingPortal.sessions.create({
       customer:   rows[0].stripe_customer_id,
       return_url: `${process.env.CLIENT_URL}/teacher/billing`,
     });
@@ -79,7 +91,7 @@ router.post('/portal', requireAuth, async (req, res, next) => {
 async function webhook(req, res) {
   let event;
   try {
-    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
+    event = getStripe().webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     return res.status(400).send(`Webhook error: ${err.message}`);
   }

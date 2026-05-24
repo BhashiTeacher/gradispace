@@ -4,6 +4,7 @@ const jwt     = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db      = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { sendPasswordReset, sendWelcome } = require('../lib/email');
 
 function signToken(teacher) {
   return jwt.sign(
@@ -29,6 +30,12 @@ router.post('/signup', async (req, res, next) => {
       [name.trim(), email.toLowerCase(), hash]
     );
     const teacher = rows[0];
+
+    // Fire-and-forget — never block signup if email fails
+    sendWelcome(teacher.name, teacher.email).catch(err =>
+      console.error('[email] welcome failed:', err.message)
+    );
+
     res.status(201).json({ token: signToken(teacher), teacher });
   } catch (err) { next(err); }
 });
@@ -67,8 +74,17 @@ router.post('/forgot-password', async (req, res, next) => {
     if (!email) return res.status(400).json({ error: 'validation_error', message: 'email is required.' });
     const token = uuidv4();
     const exp   = new Date(Date.now() + 3600_000); // 1 hour
-    await db.query('UPDATE teachers SET reset_token=$1, reset_token_exp=$2 WHERE email=$3', [token, exp, email.toLowerCase()]);
-    // TODO: send email via Resend
+    // Only send if the account exists — but always return OK (no enumeration)
+    const { rows } = await db.query(
+      'UPDATE teachers SET reset_token=$1, reset_token_exp=$2 WHERE email=$3 RETURNING name',
+      [token, exp, email.toLowerCase()]
+    );
+    if (rows[0]) {
+      const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${token}`;
+      sendPasswordReset(email.toLowerCase(), resetUrl).catch(err =>
+        console.error('[email] password reset failed:', err.message)
+      );
+    }
     res.json({ ok: true }); // always ok — no enumeration
   } catch (err) { next(err); }
 });

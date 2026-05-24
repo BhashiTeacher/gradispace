@@ -1,8 +1,8 @@
 const router = require('express').Router();
 const crypto = require('crypto');
 const db     = require('../db');
-const { requireAuth }   = require('../middleware/auth');
-const { checkBankLimit } = require('../middleware/plan');
+const { requireAuth }      = require('../middleware/auth');
+const { checkBankLimit, LIMITS } = require('../middleware/plan');
 
 function stemHash(stem) {
   return crypto.createHash('sha256').update((stem || '').trim().toLowerCase()).digest('hex');
@@ -36,17 +36,32 @@ router.get('/', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/v1/questions  — single question
-router.post('/', requireAuth, checkBankLimit, async (req, res, next) => {
+router.post('/', requireAuth, async (req, res, next) => {
   try {
     const q = req.body;
     if (!q.stem) return res.status(400).json({ error: 'validation_error', message: 'stem is required.' });
+
+    const inBank = q.inBank === true;
+
+    if (inBank) {
+      const { rows: t } = await db.query('SELECT plan FROM teachers WHERE id=$1', [req.teacherId]);
+      const plan = t[0]?.plan || 'free';
+      const limit = LIMITS[plan]?.bankSize ?? LIMITS.free.bankSize;
+      if (limit !== null) {
+        const { rows: c } = await db.query('SELECT COUNT(*) FROM questions WHERE teacher_id=$1 AND in_bank=true', [req.teacherId]);
+        if (parseInt(c[0].count) >= limit) {
+          return res.status(403).json({ error: 'limit_reached', message: `Question bank limit of ${limit} reached. Upgrade to add more.` });
+        }
+      }
+    }
+
     const hash = stemHash(q.stem);
     const { rows } = await db.query(`
       INSERT INTO questions(teacher_id,in_bank,type,stem,stem_hash,options,answer,part,part_instruction,
         passage,stimulus,image_url,audio_url,video_url,subject,grade_level,topic,tags,difficulty)
-      VALUES($1,true,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
       RETURNING *`,
-      [req.teacherId, q.type||'mcq', q.stem, hash,
+      [req.teacherId, inBank, q.type||'mcq', q.stem, hash,
        JSON.stringify(q.options||[]), q.answer||null,
        q.part||'Part 1', q.partInstruction||null,
        JSON.stringify(q.passage||null), JSON.stringify(q.stimulus||null),

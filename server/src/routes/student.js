@@ -5,6 +5,10 @@ const db     = require('../db');
 // GET /api/v1/student/exam/:token
 router.get('/exam/:token', async (req, res, next) => {
   try {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(req.params.token)) {
+      return res.status(404).json({ error: 'not_found', message: 'Exam not found or not published.' });
+    }
     const { rows } = await db.query(
       'SELECT e.*, t.name AS teacher_name FROM exams e JOIN teachers t ON t.id=e.teacher_id WHERE e.access_token=$1 AND e.published=true',
       [req.params.token]

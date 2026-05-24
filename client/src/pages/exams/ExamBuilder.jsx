@@ -83,7 +83,7 @@ export default function ExamBuilder() {
   const { id: routeId } = useParams();
   const navigate = useNavigate();
   const { isPro } = useAuth();
-  const { toast } = useToast();
+  const toast = useToast();
 
   // Exam details
   const [title, setTitle]             = useState('');

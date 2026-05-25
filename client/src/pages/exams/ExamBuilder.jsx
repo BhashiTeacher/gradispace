@@ -47,7 +47,7 @@ function DiffBadge({ value }) {
   );
 }
 
-function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove }) {
+function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove, justSaved }) {
   return (
     <div className="flex items-start gap-2 p-3 bg-white border border-slate-200 rounded-lg hover:border-primary-200 transition-colors group">
       <div className="flex flex-col gap-0.5 mt-0.5 shrink-0">
@@ -67,6 +67,11 @@ function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove 
           <SourceBadge source={q._source} />
           <DiffBadge value={q.difficulty} />
           {q.answer && <span className="text-[10px] text-slate-400">Ans: <b>{q.answer}</b></span>}
+          {justSaved && (
+            <span className="text-[10px] font-semibold text-green-600 flex items-center gap-0.5 animate-pulse">
+              <CheckIcon className="w-3 h-3" /> Saved
+            </span>
+          )}
         </div>
       </div>
       <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -200,6 +205,7 @@ export default function ExamBuilder() {
   const [activeTab, setActiveTab]     = useState('manual');
   const [saving, setSaving]           = useState(false);
   const [editingIdx, setEditingIdx]   = useState(null);
+  const [justSavedId, setJustSavedId] = useState(null);
 
   // Publish modal
   const [publishModal, setPublishModal] = useState({ open: false, link: '', token: '' });
@@ -521,10 +527,26 @@ export default function ExamBuilder() {
     }
   }
 
-  function handleQuestionSave(idx, updated) {
-    // Only update local state — server snapshot is written when the exam is saved
+  async function handleQuestionSave(idx, updated) {
     setQuestions(prev => prev.map((q, i) => i === idx ? updated : q));
     setEditingIdx(null);
+
+    // If exam and question are already persisted, write the snapshot immediately
+    // so the edit survives a refresh without requiring a full Save Draft
+    if (examId && updated.id) {
+      try {
+        await api.put(`/exams/${examId}/questions/${updated.id}`, {
+          stem:    updated.stem,
+          options: updated.options,
+          answer:  updated.answer,
+          type:    updated.type,
+        });
+        setJustSavedId(updated.id);
+        setTimeout(() => setJustSavedId(null), 2000);
+      } catch {
+        toast('Edit shown locally. Click Save Draft to persist.', 'warning');
+      }
+    }
   }
 
   async function handleUnpublish() {
@@ -999,7 +1021,8 @@ export default function ExamBuilder() {
                       onMoveUp={() => moveUp(i)}
                       onMoveDown={() => moveDown(i)}
                       onEdit={() => setEditingIdx(i)}
-                      onRemove={() => setQuestions(prev => prev.filter((_, idx) => idx !== i))} />
+                      onRemove={() => setQuestions(prev => prev.filter((_, idx) => idx !== i))}
+                      justSaved={justSavedId === q.id} />
                   )
                 )}
               </div>

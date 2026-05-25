@@ -49,8 +49,17 @@ function Skeleton({ className = '' }) {
 
 // ─── Recent exam row ─────────────────────────────────────────────────────────
 
-function ExamRow({ exam }) {
+function ExamRow({ exam, onUnpublish }) {
   const navigate = useNavigate();
+  const [unpublishing, setUnpublishing] = useState(false);
+
+  async function handleUnpublish(e) {
+    e.stopPropagation();
+    setUnpublishing(true);
+    try { await onUnpublish(exam.id); }
+    finally { setUnpublishing(false); }
+  }
+
   return (
     <div className="flex items-center gap-4 py-3.5 px-1 hover:bg-slate-50 rounded-lg transition-colors group">
       {/* Status dot */}
@@ -113,6 +122,16 @@ function ExamRow({ exam }) {
         >
           <ChartBarIcon className="w-4 h-4" />
         </button>
+        {exam.published && (
+          <button
+            onClick={handleUnpublish}
+            disabled={unpublishing}
+            className="btn-ghost btn-sm text-xs text-slate-500 hidden sm:inline-flex"
+            title="Unpublish exam"
+          >
+            {unpublishing ? <Spinner className="w-3.5 h-3.5" /> : 'Unpublish'}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -254,6 +273,17 @@ export default function Dashboard() {
     }
   }
 
+  async function handleUnpublish(examId) {
+    try {
+      await api.post(`/exams/${examId}/unpublish`);
+      setRecentExams(prev => prev.map(e => e.id === examId ? { ...e, published: false } : e));
+      refreshMe();
+      toast('Exam returned to draft.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
   // Stat card data
   const examLimit = isPro ? '∞' : '3';
   const bankLimit = isPro ? '∞' : '50';
@@ -356,7 +386,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 recentExams.map(exam => (
-                  <ExamRow key={exam.id} exam={exam} />
+                  <ExamRow key={exam.id} exam={exam} onUnpublish={handleUnpublish} />
                 ))
               )}
             </div>

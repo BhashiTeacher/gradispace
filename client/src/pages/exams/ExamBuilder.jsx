@@ -47,7 +47,7 @@ function DiffBadge({ value }) {
   );
 }
 
-function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onRemove }) {
+function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove }) {
   return (
     <div className="flex items-start gap-2 p-3 bg-white border border-slate-200 rounded-lg hover:border-primary-200 transition-colors group">
       <div className="flex flex-col gap-0.5 mt-0.5 shrink-0">
@@ -69,10 +69,103 @@ function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onRemove }) {
           {q.answer && <span className="text-[10px] text-slate-400">Ans: <b>{q.answer}</b></span>}
         </div>
       </div>
-      <button onClick={onRemove}
-        className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        <TrashIcon className="w-4 h-4" />
-      </button>
+      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button onClick={onEdit}
+          className="p-1 rounded hover:bg-primary-50 text-slate-300 hover:text-primary-500">
+          <PencilSquareIcon className="w-4 h-4" />
+        </button>
+        <button onClick={onRemove}
+          className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500">
+          <TrashIcon className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCancel }) {
+  const [stem, setStem]     = useState(q.stem || '');
+  const [opts, setOpts]     = useState(() =>
+    ['A', 'B', 'C', 'D'].map(l => q.options?.find(o => o.letter === l)?.text || '')
+  );
+  const [answer, setAnswer] = useState(q.answer || 'A');
+  const [diff, setDiff]     = useState(q.difficulty || 'medium');
+  const [errors, setErrors] = useState({});
+
+  function handleSave() {
+    const e = {};
+    if (!stem.trim())                          e.stem = 'Question text is required.';
+    if (!opts[0].trim() || !opts[1].trim())    e.opts = 'At least options A and B are required.';
+    if (Object.keys(e).length) { setErrors(e); return; }
+    onSave({
+      ...q,
+      stem:       stem.trim(),
+      options:    ['A', 'B', 'C', 'D'].map((letter, i) => ({ letter, text: opts[i] || '' })),
+      answer,
+      difficulty: diff,
+    });
+  }
+
+  return (
+    <div className="p-4 bg-white border-2 border-primary-300 rounded-lg space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-primary-600">Editing Q{index + 1}</span>
+        <div className="flex gap-0.5">
+          <button onClick={onMoveUp} disabled={index === 0}
+            className="p-0.5 rounded hover:bg-slate-100 disabled:opacity-20 text-slate-400">
+            <ArrowUpIcon className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={onMoveDown} disabled={index === total - 1}
+            className="p-0.5 rounded hover:bg-slate-100 disabled:opacity-20 text-slate-400">
+            <ArrowDownIcon className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+      <div>
+        <label className="label">Question text</label>
+        <textarea className={`input resize-none ${errors.stem ? 'border-red-400' : ''}`}
+          rows={3} value={stem} onChange={e => setStem(e.target.value)} />
+        {errors.stem && <p className="text-xs text-red-500 mt-1">{errors.stem}</p>}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {['A', 'B', 'C', 'D'].map((letter, i) => (
+          <div key={letter}>
+            <label className="label text-xs">Option {letter}{i < 2 && <span className="text-red-400"> *</span>}</label>
+            <input className={`input ${errors.opts && i < 2 ? 'border-red-400' : ''}`}
+              value={opts[i]}
+              onChange={e => { const n = [...opts]; n[i] = e.target.value; setOpts(n); }} />
+          </div>
+        ))}
+      </div>
+      {errors.opts && <p className="text-xs text-red-500">{errors.opts}</p>}
+      <div className="flex gap-4 items-end flex-wrap">
+        <div>
+          <label className="label">Correct Answer</label>
+          <div className="flex gap-1.5">
+            {['A', 'B', 'C', 'D'].map(letter => (
+              <label key={letter}
+                className={`flex items-center justify-center w-9 h-9 rounded-lg border-2 cursor-pointer font-semibold text-sm transition-colors
+                  ${answer === letter ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                <input type="radio" name={`editAnswer_${q._lid}`} value={letter}
+                  checked={answer === letter} onChange={() => setAnswer(letter)} className="sr-only" />
+                {letter}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 min-w-[120px]">
+          <label className="label">Difficulty</label>
+          <select className="input" value={diff} onChange={e => setDiff(e.target.value)}>
+            <option value="easy">Easy</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+      </div>
+      <div className="flex gap-2 pt-1">
+        <button onClick={handleSave} className="btn-primary btn-sm">Save Changes</button>
+        <button onClick={onCancel} className="btn-ghost btn-sm">Cancel</button>
+      </div>
     </div>
   );
 }
@@ -106,6 +199,7 @@ export default function ExamBuilder() {
   // Tab & save
   const [activeTab, setActiveTab]     = useState('manual');
   const [saving, setSaving]           = useState(false);
+  const [editingIdx, setEditingIdx]   = useState(null);
 
   // Publish modal
   const [publishModal, setPublishModal] = useState({ open: false, link: '', token: '' });
@@ -367,7 +461,7 @@ export default function ExamBuilder() {
         });
       }
 
-      // Persist unsaved questions
+      // Persist unsaved questions; promote existing draft questions to bank if requested
       const saved = [...questions];
       for (let i = 0; i < saved.length; i++) {
         if (!saved[i].id) {
@@ -384,6 +478,9 @@ export default function ExamBuilder() {
             passage:    saved[i].passage || null,
           });
           saved[i] = { ...saved[i], id: question.id };
+        } else if (addToBank && saved[i]._source !== 'bank') {
+          await api.put(`/questions/${saved[i].id}`, { inBank: true });
+          saved[i] = { ...saved[i], _source: 'bank' };
         }
       }
       setQuestions(saved);
@@ -403,6 +500,31 @@ export default function ExamBuilder() {
       }
     } catch (err) {
       toast(err.message || 'Failed to save.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleQuestionSave(idx, updated) {
+    if (updated.id) {
+      api.put(`/questions/${updated.id}`, {
+        stem: updated.stem, options: updated.options,
+        answer: updated.answer, difficulty: updated.difficulty,
+      }).catch(err => toast(err.message, 'error'));
+    }
+    setQuestions(prev => prev.map((q, i) => i === idx ? updated : q));
+    setEditingIdx(null);
+  }
+
+  async function handleUnpublish() {
+    if (!examId) return;
+    setSaving(true);
+    try {
+      await api.post(`/exams/${examId}/unpublish`);
+      setIsPublished(false);
+      toast('Exam returned to draft.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
     } finally {
       setSaving(false);
     }
@@ -854,12 +976,21 @@ export default function ExamBuilder() {
               </div>
             ) : (
               <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-                {questions.map((q, i) => (
-                  <QuestionItem key={q._lid} q={q} index={i} total={questions.length}
-                    onMoveUp={() => moveUp(i)}
-                    onMoveDown={() => moveDown(i)}
-                    onRemove={() => setQuestions(prev => prev.filter((_, idx) => idx !== i))} />
-                ))}
+                {questions.map((q, i) =>
+                  editingIdx === i ? (
+                    <QuestionEditForm key={q._lid} q={q} index={i} total={questions.length}
+                      onMoveUp={() => moveUp(i)}
+                      onMoveDown={() => moveDown(i)}
+                      onSave={updated => handleQuestionSave(i, updated)}
+                      onCancel={() => setEditingIdx(null)} />
+                  ) : (
+                    <QuestionItem key={q._lid} q={q} index={i} total={questions.length}
+                      onMoveUp={() => moveUp(i)}
+                      onMoveDown={() => moveDown(i)}
+                      onEdit={() => setEditingIdx(i)}
+                      onRemove={() => setQuestions(prev => prev.filter((_, idx) => idx !== i))} />
+                  )
+                )}
               </div>
             )}
           </div>
@@ -881,6 +1012,12 @@ export default function ExamBuilder() {
             )}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {isPublished && (
+              <button onClick={handleUnpublish} disabled={saving}
+                className="btn-ghost btn-sm text-slate-500 hidden sm:inline-flex">
+                Unpublish
+              </button>
+            )}
             <button onClick={() => saveExam()} disabled={saving} className="btn-secondary btn-sm">
               {saving && <Spinner className="w-4 h-4 mr-1.5" />}
               Save Draft

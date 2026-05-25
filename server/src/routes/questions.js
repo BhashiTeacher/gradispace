@@ -120,7 +120,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 router.put('/:id', requireAuth, async (req, res, next) => {
   try {
     const allowed = { stem:'stem', options:'options', answer:'answer', type:'type',
-      part:'part', partInstruction:'part_instruction', passage:'passage', stimulus:'stimulus',
+      inBank:'in_bank', passage:'passage', stimulus:'stimulus',
       imageUrl:'image_url', audioUrl:'audio_url', videoUrl:'video_url',
       subject:'subject', gradeLevel:'grade_level', topic:'topic', tags:'tags', difficulty:'difficulty' };
     const sets = []; const vals = []; let i = 1;

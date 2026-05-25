@@ -18,8 +18,14 @@ router.get('/exam/:token', async (req, res, next) => {
 
     const { rows: qRows } = await db.query(`
       SELECT q.id, eq.order_num, eq.part AS part, eq.part_instruction,
-             q.type, q.stem, q.options, q.image_url, q.audio_url, q.video_url,
-             q.passage, q.stimulus
+             COALESCE(eq.type, q.type) AS type,
+             COALESCE(eq.stem, q.stem) AS stem,
+             COALESCE(eq.options, q.options) AS options,
+             COALESCE(eq.image_url, q.image_url) AS image_url,
+             COALESCE(eq.audio_url, q.audio_url) AS audio_url,
+             COALESCE(eq.video_url, q.video_url) AS video_url,
+             COALESCE(eq.passage, q.passage) AS passage,
+             COALESCE(eq.stimulus, q.stimulus) AS stimulus
       FROM exam_questions eq
       JOIN questions q ON q.id=eq.question_id
       WHERE eq.exam_id=$1

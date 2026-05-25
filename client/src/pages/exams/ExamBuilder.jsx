@@ -489,9 +489,21 @@ export default function ExamBuilder() {
       }
       setQuestions(saved);
 
-      // Set ordered question list on exam
+      // Set ordered question list on exam — include full snapshot data so bank and paper are independent
       await api.put(`/exams/${currentId}/questions`, {
-        questions: saved.map(q => ({ questionId: q.id, part: 'Part 1' })),
+        questions: saved.map(q => ({
+          questionId:  q.id,
+          part:        'Part 1',
+          stem:        q.stem        || null,
+          options:     q.options     || [],
+          answer:      q.answer      || null,
+          type:        q.type        || 'mcq',
+          passage:     q.passage     || null,
+          imageUrl:    q.imageUrl    || null,
+          audioUrl:    q.audioUrl    || null,
+          videoUrl:    q.videoUrl    || null,
+          stimulus:    q.stimulus    || null,
+        })),
       });
 
       if (publish) {
@@ -509,13 +521,8 @@ export default function ExamBuilder() {
     }
   }
 
-  async function handleQuestionSave(idx, updated) {
-    if (updated.id) {
-      api.put(`/questions/${updated.id}`, {
-        stem: updated.stem, options: updated.options,
-        answer: updated.answer, difficulty: updated.difficulty,
-      }).catch(err => toast(err.message, 'error'));
-    }
+  function handleQuestionSave(idx, updated) {
+    // Only update local state — server snapshot is written when the exam is saved
     setQuestions(prev => prev.map((q, i) => i === idx ? updated : q));
     setEditingIdx(null);
   }

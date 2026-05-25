@@ -57,13 +57,12 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const hash = stemHash(q.stem);
     const { rows } = await db.query(`
-      INSERT INTO questions(teacher_id,in_bank,type,stem,stem_hash,options,answer,part,part_instruction,
+      INSERT INTO questions(teacher_id,in_bank,type,stem,stem_hash,options,answer,
         passage,stimulus,image_url,audio_url,video_url,subject,grade_level,topic,tags,difficulty)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *`,
       [req.teacherId, inBank, q.type||'mcq', q.stem, hash,
        JSON.stringify(q.options||[]), q.answer||null,
-       q.part||'Part 1', q.partInstruction||null,
        JSON.stringify(q.passage||null), JSON.stringify(q.stimulus||null),
        q.imageUrl||null, q.audioUrl||null, q.videoUrl||null,
        q.subject||null, q.gradeLevel||null, q.topic||null,
@@ -90,13 +89,12 @@ router.post('/bulk', requireAuth, checkBankLimit, async (req, res, next) => {
       const hash = stemHash(q.stem);
       if (existingHashes.has(hash)) { skipped++; continue; }
       const { rows } = await db.query(`
-        INSERT INTO questions(teacher_id,in_bank,type,stem,stem_hash,options,answer,part,part_instruction,
+        INSERT INTO questions(teacher_id,in_bank,type,stem,stem_hash,options,answer,
           passage,stimulus,image_url,audio_url,video_url,subject,grade_level,topic,tags,difficulty)
-        VALUES($1,true,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        VALUES($1,true,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *`,
         [req.teacherId, q.type||'mcq', q.stem, hash,
          JSON.stringify(q.options||[]), q.answer||null,
-         q.part||'Part 1', q.partInstruction||null,
          JSON.stringify(q.passage||null), JSON.stringify(q.stimulus||null),
          q.imageUrl||null, q.audioUrl||null, q.videoUrl||null,
          q.subject||null, q.gradeLevel||null, q.topic||null,

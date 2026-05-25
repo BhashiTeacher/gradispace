@@ -254,6 +254,10 @@ export default function ExamBuilder() {
         setExamType(exam.exam_type || 'open');
         setIsPublished(!!exam.published);
         setExamId(exam.id);
+        if (exam.published && exam.access_token) {
+          const link = `${window.location.origin}/e/${exam.access_token}`;
+          setPublishModal({ open: false, link, token: exam.access_token });
+        }
         setQuestions((qs || []).map(q => ({
           id:         q.id,
           stem:       q.stem,
@@ -1012,6 +1016,12 @@ export default function ExamBuilder() {
             )}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {isPublished && publishModal.link && (
+              <button onClick={() => setPublishModal(m => ({ ...m, open: true }))}
+                className="btn-ghost btn-sm text-primary-600 hidden sm:inline-flex">
+                <ClipboardDocumentIcon className="w-4 h-4 mr-1" /> Share Link
+              </button>
+            )}
             {isPublished && (
               <button onClick={handleUnpublish} disabled={saving}
                 className="btn-ghost btn-sm text-slate-500 hidden sm:inline-flex">

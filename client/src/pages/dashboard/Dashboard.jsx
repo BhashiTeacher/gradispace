@@ -4,12 +4,56 @@ import {
   DocumentTextIcon, CircleStackIcon, UsersIcon, SparklesIcon,
   PencilSquareIcon, ChartBarIcon, RocketLaunchIcon, EyeIcon,
   ArrowRightIcon, CheckCircleIcon, ClockIcon, LockClosedIcon,
+  ShareIcon, XMarkIcon, ClipboardDocumentIcon, CheckIcon,
 } from '@heroicons/react/24/outline';
+import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { api } from '../../api';
 import Spinner from '../../components/UI/Spinner';
 import Badge from '../../components/UI/Badge';
+
+// ─── Share modal ─────────────────────────────────────────────────────────────
+
+function ShareModal({ link, title, onClose }) {
+  const [copied, setCopied] = useState(false);
+
+  function copyLink() {
+    navigator.clipboard.writeText(link).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="font-semibold text-slate-900">Share Exam</h2>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100 text-slate-400">
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-sm text-slate-500 mb-5 truncate">{title}</p>
+        <div className="flex justify-center mb-5">
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+            <QRCodeSVG value={link} size={160} />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-lg border border-slate-200 mb-4">
+          <span className="text-xs text-slate-600 flex-1 truncate font-mono">{link}</span>
+          <button onClick={copyLink} className="btn-secondary btn-sm flex-shrink-0">
+            {copied
+              ? <><CheckIcon className="w-4 h-4 text-green-500 mr-1" />Copied!</>
+              : <><ClipboardDocumentIcon className="w-4 h-4 mr-1" />Copy</>
+            }
+          </button>
+        </div>
+        <button onClick={onClose} className="btn-ghost btn-sm w-full">Close</button>
+      </div>
+    </div>
+  );
+}
 
 // ─── Stat card ───────────────────────────────────────────────────────────────
 
@@ -49,15 +93,23 @@ function Skeleton({ className = '' }) {
 
 // ─── Recent exam row ─────────────────────────────────────────────────────────
 
-function ExamRow({ exam, onUnpublish }) {
+function ExamRow({ exam, onUnpublish, onPublish, onShare }) {
   const navigate = useNavigate();
   const [unpublishing, setUnpublishing] = useState(false);
+  const [publishing, setPublishing]     = useState(false);
 
   async function handleUnpublish(e) {
     e.stopPropagation();
     setUnpublishing(true);
     try { await onUnpublish(exam.id); }
     finally { setUnpublishing(false); }
+  }
+
+  async function handlePublish(e) {
+    e.stopPropagation();
+    setPublishing(true);
+    try { await onPublish(exam.id); }
+    finally { setPublishing(false); }
   }
 
   return (
@@ -122,14 +174,32 @@ function ExamRow({ exam, onUnpublish }) {
         >
           <ChartBarIcon className="w-4 h-4" />
         </button>
-        {exam.published && (
+        {exam.published ? (
+          <>
+            <button
+              onClick={e => { e.stopPropagation(); onShare(exam); }}
+              className="btn-ghost btn-sm hidden sm:inline-flex"
+              title="Share exam link"
+            >
+              <ShareIcon className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleUnpublish}
+              disabled={unpublishing}
+              className="btn-ghost btn-sm text-xs text-slate-500 hidden sm:inline-flex"
+              title="Unpublish exam"
+            >
+              {unpublishing ? <Spinner className="w-3.5 h-3.5" /> : 'Unpublish'}
+            </button>
+          </>
+        ) : (
           <button
-            onClick={handleUnpublish}
-            disabled={unpublishing}
-            className="btn-ghost btn-sm text-xs text-slate-500 hidden sm:inline-flex"
-            title="Unpublish exam"
+            onClick={handlePublish}
+            disabled={publishing}
+            className="btn-ghost btn-sm text-xs text-primary-600 hidden sm:inline-flex"
+            title="Publish exam"
           >
-            {unpublishing ? <Spinner className="w-3.5 h-3.5" /> : 'Unpublish'}
+            {publishing ? <Spinner className="w-3.5 h-3.5" /> : 'Publish'}
           </button>
         )}
       </div>
@@ -254,6 +324,7 @@ export default function Dashboard() {
 
   const [recentExams, setRecentExams]   = useState([]);
   const [loadingExams, setLoadingExams] = useState(true);
+  const [shareModal, setShareModal]     = useState(null); // { link, title }
 
   useEffect(() => {
     loadData();
@@ -282,6 +353,24 @@ export default function Dashboard() {
     } catch (err) {
       toast(err.message, 'error');
     }
+  }
+
+  async function handlePublish(examId) {
+    try {
+      const { exam, studentLink } = await api.post(`/exams/${examId}/publish`);
+      setRecentExams(prev => prev.map(e =>
+        e.id === examId ? { ...e, published: true, access_token: exam.access_token } : e
+      ));
+      refreshMe();
+      setShareModal({ link: studentLink, title: exam.title });
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function handleShare(exam) {
+    const link = `${window.location.origin}/e/${exam.access_token}`;
+    setShareModal({ link, title: exam.title });
   }
 
   // Stat card data
@@ -386,7 +475,11 @@ export default function Dashboard() {
                 </div>
               ) : (
                 recentExams.map(exam => (
-                  <ExamRow key={exam.id} exam={exam} onUnpublish={handleUnpublish} />
+                  <ExamRow key={exam.id} exam={exam}
+                    onUnpublish={handleUnpublish}
+                    onPublish={handlePublish}
+                    onShare={handleShare}
+                  />
                 ))
               )}
             </div>
@@ -474,6 +567,14 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {shareModal && (
+        <ShareModal
+          link={shareModal.link}
+          title={shareModal.title}
+          onClose={() => setShareModal(null)}
+        />
+      )}
     </div>
   );
 }

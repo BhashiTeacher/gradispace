@@ -25,7 +25,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const [data, count] = await Promise.all([
-      db.query(`SELECT id,type,stem,subject,grade_level,topic,tags,image_url,audio_url,video_url,difficulty,created_at
+      db.query(`SELECT id,type,stem,options,answer,subject,grade_level,topic,tags,image_url,audio_url,video_url,difficulty,created_at
                 FROM questions ${where} ORDER BY created_at DESC LIMIT $${i} OFFSET $${i+1}`,
         [...params, parseInt(limit), offset]),
       db.query(`SELECT COUNT(*) FROM questions ${where}`, params),
@@ -124,8 +124,14 @@ router.put('/:id', requireAuth, async (req, res, next) => {
       imageUrl:'image_url', audioUrl:'audio_url', videoUrl:'video_url',
       subject:'subject', gradeLevel:'grade_level', topic:'topic', tags:'tags', difficulty:'difficulty' };
     const sets = []; const vals = []; let i = 1;
+    const jsonbCols = new Set(['options', 'passage', 'stimulus']);
     for (const [k, col] of Object.entries(allowed)) {
-      if (req.body[k] !== undefined) { sets.push(`${col}=$${i++}`); vals.push(req.body[k]); }
+      if (req.body[k] !== undefined) {
+        sets.push(`${col}=$${i++}`);
+        let v = req.body[k];
+        if (jsonbCols.has(col) && v !== null && typeof v === 'object') v = JSON.stringify(v);
+        vals.push(v);
+      }
     }
     if (!sets.length) return res.status(400).json({ error: 'validation_error', message: 'No valid fields.' });
     sets.push('updated_at=NOW()');
@@ -141,8 +147,21 @@ router.put('/:id', requireAuth, async (req, res, next) => {
 // DELETE /api/v1/questions/:id
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
-    const { rowCount } = await db.query('DELETE FROM questions WHERE id=$1 AND teacher_id=$2', [req.params.id, req.teacherId]);
-    if (!rowCount) return res.status(404).json({ error: 'not_found' });
+    const { rows: usages } = await db.query(
+      'SELECT 1 FROM exam_questions WHERE question_id=$1 LIMIT 1', [req.params.id]
+    );
+    if (usages.length) {
+      // Question is used in an exam — soft-delete by removing from bank only
+      const { rowCount } = await db.query(
+        'UPDATE questions SET in_bank=false WHERE id=$1 AND teacher_id=$2', [req.params.id, req.teacherId]
+      );
+      if (!rowCount) return res.status(404).json({ error: 'not_found' });
+    } else {
+      const { rowCount } = await db.query(
+        'DELETE FROM questions WHERE id=$1 AND teacher_id=$2', [req.params.id, req.teacherId]
+      );
+      if (!rowCount) return res.status(404).json({ error: 'not_found' });
+    }
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

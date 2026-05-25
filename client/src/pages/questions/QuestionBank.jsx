@@ -191,7 +191,7 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function QuestionBank() {
   const { teacher, refreshMe } = useAuth();
-  const { toast } = useToast();
+  const toast = useToast();
 
   const [questions, setQuestions] = useState([]);
   const [total, setTotal]         = useState(0);

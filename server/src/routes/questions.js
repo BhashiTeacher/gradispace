@@ -35,6 +35,37 @@ router.get('/', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/v1/questions/filters
+router.get('/filters', requireAuth, async (req, res, next) => {
+  try {
+    const { subject } = req.query;
+    const base = 'WHERE teacher_id=$1 AND in_bank=true';
+    const subjectClause = subject ? ' AND subject=$2' : '';
+    const topicParams = subject ? [req.teacherId, subject] : [req.teacherId];
+
+    const [subjectsRes, topicsRes, gradesRes] = await Promise.all([
+      db.query(
+        `SELECT DISTINCT subject FROM questions ${base} AND subject IS NOT NULL ORDER BY subject`,
+        [req.teacherId]
+      ),
+      db.query(
+        `SELECT DISTINCT topic FROM questions ${base}${subjectClause} AND topic IS NOT NULL ORDER BY topic`,
+        topicParams
+      ),
+      db.query(
+        `SELECT DISTINCT grade_level FROM questions ${base} AND grade_level IS NOT NULL ORDER BY grade_level`,
+        [req.teacherId]
+      ),
+    ]);
+
+    res.json({
+      subjects:    subjectsRes.rows.map(r => r.subject),
+      topics:      topicsRes.rows.map(r => r.topic),
+      gradeLevels: gradesRes.rows.map(r => r.grade_level),
+    });
+  } catch (err) { next(err); }
+});
+
 // POST /api/v1/questions  — single question
 router.post('/', requireAuth, async (req, res, next) => {
   try {

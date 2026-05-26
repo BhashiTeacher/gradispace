@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   PlusIcon, MagnifyingGlassIcon, TrashIcon, PencilIcon,
-  CircleStackIcon, XMarkIcon,
+  CircleStackIcon, XMarkIcon, ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -32,7 +32,7 @@ function DiffBadge({ value }) {
 
 // ── Add / Edit modal ──────────────────────────────────────────────────────────
 function QuestionModal({ mode, initial, onSave, onClose, saving }) {
-  const [form, setForm]   = useState(initial || emptyForm);
+  const [form, setForm]     = useState(initial || emptyForm);
   const [errors, setErrors] = useState({});
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -48,11 +48,9 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
   function handleSubmit() {
     if (!validate()) return;
     const payload = {
-      stem: form.stem.trim(), type: form.type,
-      difficulty: form.difficulty,
-      subject:    form.subject.trim()    || null,
-      topic:      form.topic.trim()      || null,
-      gradeLevel: form.gradeLevel.trim() || null,
+      stem:       form.stem.trim(),   type:       form.type,
+      difficulty: form.difficulty,    subject:    form.subject.trim()    || null,
+      topic:      form.topic.trim()   || null,    gradeLevel: form.gradeLevel.trim() || null,
       tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       inBank: true,
     };
@@ -77,7 +75,6 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
         </div>
 
         <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
-          {/* Type selector */}
           <div className="flex gap-2">
             {['mcq', 'short_answer'].map(t => (
               <label key={t}
@@ -90,7 +87,6 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
             ))}
           </div>
 
-          {/* Stem */}
           <div>
             <label className="label">Question text <span className="text-red-400">*</span></label>
             <textarea className={`input resize-none ${errors.stem ? 'border-red-400' : ''}`}
@@ -99,15 +95,12 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
             {errors.stem && <p className="text-xs text-red-500 mt-1">{errors.stem}</p>}
           </div>
 
-          {/* MCQ options + answer */}
           {form.type === 'mcq' && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 {LETTERS.map((letter, i) => (
                   <div key={letter}>
-                    <label className="label text-xs">
-                      Option {letter} {i < 2 && <span className="text-red-400">*</span>}
-                    </label>
+                    <label className="label text-xs">Option {letter} {i < 2 && <span className="text-red-400">*</span>}</label>
                     <input className={`input ${errors.opts && i < 2 ? 'border-red-400' : ''}`}
                       value={form.opts[i]}
                       onChange={e => { const n = [...form.opts]; n[i] = e.target.value; setF('opts', n); }}
@@ -122,9 +115,7 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
                   {LETTERS.map(letter => (
                     <label key={letter}
                       className={`flex items-center justify-center w-10 h-10 rounded-lg border-2 cursor-pointer font-semibold text-sm transition-colors
-                        ${form.answer === letter
-                          ? 'border-primary-500 bg-primary-50 text-primary-700'
-                          : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                        ${form.answer === letter ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
                       <input type="radio" name="answer" value={letter} checked={form.answer === letter}
                         onChange={() => setF('answer', letter)} className="sr-only" />
                       {letter}
@@ -135,7 +126,6 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
             </>
           )}
 
-          {/* Short answer model answer */}
           {form.type === 'short_answer' && (
             <div>
               <label className="label">Model Answer</label>
@@ -145,7 +135,6 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
             </div>
           )}
 
-          {/* Metadata */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Subject</label>
@@ -198,27 +187,57 @@ export default function QuestionBank() {
   const [page, setPage]           = useState(1);
   const [loading, setLoading]     = useState(true);
 
+  // Filters
   const [search, setSearch]               = useState('');
   const [filterSubject, setFilterSubject] = useState('');
+  const [filterTopic, setFilterTopic]     = useState('');
+  const [filterGrade, setFilterGrade]     = useState('');
   const [filterType, setFilterType]       = useState('');
   const [filterDiff, setFilterDiff]       = useState('');
+
+  // Filter dropdown options (loaded from server)
+  const [filterOptions, setFilterOptions] = useState({ subjects: [], topics: [], gradeLevels: [] });
+  const [topicSearch, setTopicSearch]     = useState('');
+  const [topicOpen, setTopicOpen]         = useState(false);
+  const topicRef    = useRef(null);
+  const searchTimer = useRef(null);
 
   const [selected, setSelected] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
   const [saving, setSaving]     = useState(false);
+  const [modal, setModal]       = useState(null);
 
-  const [modal, setModal] = useState(null); // null | { mode, q, initial }
-
-  const searchTimer = useRef(null);
-
-  // Plan limits
   const bankCount = teacher?.questionBankCount ?? 0;
   const isFree    = teacher?.plan === 'free';
   const bankLimit = 50;
   const limitNear = isFree && bankCount >= 40;
   const limitHit  = isFree && bankCount >= 50;
 
-  useEffect(() => { load(1); }, [filterSubject, filterType, filterDiff]); // eslint-disable-line
+  // Close topic dropdown when clicking outside
+  useEffect(() => {
+    function outside(e) {
+      if (topicRef.current && !topicRef.current.contains(e.target)) setTopicOpen(false);
+    }
+    document.addEventListener('mousedown', outside);
+    return () => document.removeEventListener('mousedown', outside);
+  }, []);
+
+  // Load filter options once on mount
+  useEffect(() => { loadFilters(); }, []); // eslint-disable-line
+
+  // Reload questions when filters change (also fires on mount for initial load)
+  useEffect(() => { load(1); }, [filterSubject, filterTopic, filterGrade, filterType, filterDiff]); // eslint-disable-line
+
+  function loadFilters(subject = '') {
+    const qs = subject ? `?subject=${encodeURIComponent(subject)}` : '';
+    api.get(`/questions/filters${qs}`)
+      .then(data => setFilterOptions(prev =>
+        subject
+          ? { ...prev, topics: data.topics }
+          : data
+      ))
+      .catch(() => {});
+  }
 
   function load(p = page, searchVal = search) {
     setLoading(true);
@@ -226,12 +245,12 @@ export default function QuestionBank() {
     const params = new URLSearchParams({ page: p, limit: LIMIT });
     if (searchVal)     params.set('search', searchVal);
     if (filterSubject) params.set('subject', filterSubject);
+    if (filterTopic)   params.set('topic', filterTopic);
+    if (filterGrade)   params.set('gradeLevel', filterGrade);
     if (filterType)    params.set('type', filterType);
     if (filterDiff)    params.set('difficulty', filterDiff);
     api.get(`/questions?${params}`)
-      .then(({ questions: qs, total: t }) => {
-        setQuestions(qs); setTotal(t); setPage(p);
-      })
+      .then(({ questions: qs, total: t }) => { setQuestions(qs); setTotal(t); setPage(p); })
       .catch(() => toast('Failed to load questions.', 'error'))
       .finally(() => setLoading(false));
   }
@@ -239,7 +258,13 @@ export default function QuestionBank() {
   function onSearchChange(val) {
     setSearch(val);
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => load(1, val), 400);
+    searchTimer.current = setTimeout(() => load(1, val), 300);
+  }
+
+  function onSubjectChange(s) {
+    setFilterSubject(s);
+    setFilterTopic('');
+    loadFilters(s);
   }
 
   function toggleSelect(id) {
@@ -268,12 +293,11 @@ export default function QuestionBank() {
       }
       setModal(null);
       await refreshMe();
+      loadFilters(filterSubject); // refresh so new subjects/topics appear
       load(modal.mode === 'add' ? 1 : page);
     } catch (err) {
       toast(err.message || 'Failed to save question.', 'error');
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
   async function handleDelete(id) {
@@ -286,9 +310,7 @@ export default function QuestionBank() {
       load(questions.length === 1 && page > 1 ? page - 1 : page);
     } catch (err) {
       toast(err.message || 'Failed to delete.', 'error');
-    } finally {
-      setDeleting(false);
-    }
+    } finally { setDeleting(false); }
   }
 
   async function handleBulkDelete() {
@@ -318,22 +340,37 @@ export default function QuestionBank() {
         opts,
         answer:      q.type === 'mcq' ? (q.answer || 'A') : 'A',
         modelAnswer: q.type === 'short_answer' ? (q.answer || '') : '',
-        subject:    q.subject     || '',
-        topic:      q.topic       || '',
-        gradeLevel: q.grade_level || '',
-        difficulty: q.difficulty  || 'medium',
-        tags:       (q.tags || []).join(', '),
+        subject:     q.subject     || '',
+        topic:       q.topic       || '',
+        gradeLevel:  q.grade_level || '',
+        difficulty:  q.difficulty  || 'medium',
+        tags:        (q.tags || []).join(', '),
       },
     });
   }
 
   function clearFilters() {
-    setSearch(''); setFilterSubject(''); setFilterType(''); setFilterDiff('');
+    clearTimeout(searchTimer.current);
+    setSearch('');
+    setFilterSubject('');
+    setFilterTopic('');
+    setFilterGrade('');
+    setFilterType('');
+    setFilterDiff('');
+    setTopicSearch('');
+    loadFilters('');
     load(1, '');
   }
 
-  const pages = Math.ceil(total / LIMIT);
-  const hasFilters = search || filterSubject || filterType || filterDiff;
+  const pages      = Math.ceil(total / LIMIT);
+  const hasFilters = !!(search || filterSubject || filterTopic || filterGrade || filterType || filterDiff);
+
+  const filteredTopics = useMemo(() =>
+    filterOptions.topics.filter(t =>
+      !topicSearch || t.toLowerCase().includes(topicSearch.toLowerCase())
+    ),
+    [filterOptions.topics, topicSearch]
+  );
 
   return (
     <div>
@@ -342,7 +379,7 @@ export default function QuestionBank() {
         <div>
           <h1 className="page-title">Question Bank</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {total} question{total !== 1 ? 's' : ''} in your bank
+            {bankCount} question{bankCount !== 1 ? 's' : ''} in your bank
           </p>
         </div>
         <button
@@ -381,38 +418,101 @@ export default function QuestionBank() {
       {/* Filters */}
       <div className="card p-4 mb-4">
         <div className="flex flex-wrap gap-3 items-center">
+
+          {/* Keyword search */}
           <div className="relative flex-1 min-w-[200px]">
             <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input className="input pl-9" value={search} onChange={e => onSearchChange(e.target.value)}
               placeholder="Search questions…" />
           </div>
-          <input className="input w-36" value={filterSubject}
-            onChange={e => setFilterSubject(e.target.value)} placeholder="Subject" />
-          <select className="input w-36" value={filterType} onChange={e => setFilterType(e.target.value)}>
-            <option value="">All types</option>
+
+          {/* Subject dropdown */}
+          <select className="input w-40" value={filterSubject} onChange={e => onSubjectChange(e.target.value)}>
+            <option value="">All Subjects</option>
+            {filterOptions.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+
+          {/* Topic — searchable dropdown */}
+          <div className="relative w-44" ref={topicRef}>
+            <button type="button"
+              className={`input w-full flex items-center justify-between gap-1 ${topicOpen ? 'border-primary-400 ring-1 ring-primary-200' : ''}`}
+              onClick={() => setTopicOpen(p => !p)}>
+              <span className={`flex-1 truncate text-left text-sm ${filterTopic ? 'text-slate-900' : 'text-slate-400'}`}>
+                {filterTopic || 'All Topics'}
+              </span>
+              <ChevronDownIcon className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${topicOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {topicOpen && (
+              <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 flex flex-col overflow-hidden">
+                <div className="p-2 border-b border-slate-100">
+                  <input autoFocus className="input text-sm py-1.5" placeholder="Type to search…"
+                    value={topicSearch} onChange={e => setTopicSearch(e.target.value)}
+                    onClick={e => e.stopPropagation()} />
+                </div>
+                <div className="overflow-y-auto">
+                  <button
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${!filterTopic ? 'text-primary-600 font-medium' : 'text-slate-600'}`}
+                    onClick={() => { setFilterTopic(''); setTopicOpen(false); setTopicSearch(''); }}>
+                    All Topics
+                  </button>
+                  {filteredTopics.map(t => (
+                    <button key={t}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 truncate ${filterTopic === t ? 'text-primary-600 font-medium bg-primary-50' : 'text-slate-700'}`}
+                      onClick={() => { setFilterTopic(t); setTopicOpen(false); setTopicSearch(''); }}>
+                      {t}
+                    </button>
+                  ))}
+                  {filteredTopics.length === 0 && (
+                    <p className="text-xs text-slate-400 px-3 py-2 text-center">No topics found</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Grade Level */}
+          <select className="input w-36" value={filterGrade} onChange={e => setFilterGrade(e.target.value)}>
+            <option value="">All Grades</option>
+            {filterOptions.gradeLevels.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
+
+          {/* Type */}
+          <select className="input w-40" value={filterType} onChange={e => setFilterType(e.target.value)}>
+            <option value="">All Types</option>
             <option value="mcq">MCQ</option>
             <option value="short_answer">Short Answer</option>
           </select>
-          <select className="input w-36" value={filterDiff} onChange={e => setFilterDiff(e.target.value)}>
-            <option value="">All levels</option>
+
+          {/* Difficulty */}
+          <select className="input w-32" value={filterDiff} onChange={e => setFilterDiff(e.target.value)}>
+            <option value="">All Levels</option>
             <option value="easy">Easy</option>
             <option value="medium">Medium</option>
             <option value="hard">Hard</option>
           </select>
+
           {hasFilters && (
             <button onClick={clearFilters} className="btn-ghost btn-sm">
-              <XMarkIcon className="w-4 h-4 mr-1" /> Clear
+              <XMarkIcon className="w-4 h-4 mr-1" /> Clear all
             </button>
           )}
         </div>
+
+        {/* Result count */}
+        {!loading && (
+          <p className="text-xs text-slate-400 mt-2.5">
+            {hasFilters
+              ? `Showing ${total} of ${bankCount} question${bankCount !== 1 ? 's' : ''}`
+              : `${bankCount} question${bankCount !== 1 ? 's' : ''} in your bank`}
+          </p>
+        )}
       </div>
 
       {/* Bulk action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 bg-primary-50 border border-primary-200 rounded-lg px-4 py-2.5 mb-4">
-          <span className="text-sm font-medium text-primary-700">
-            {selected.size} selected
-          </span>
+          <span className="text-sm font-medium text-primary-700">{selected.size} selected</span>
           <button onClick={handleBulkDelete} disabled={deleting} className="btn-danger btn-sm ml-auto">
             {deleting ? <Spinner className="w-4 h-4 mr-1.5" /> : <TrashIcon className="w-4 h-4 mr-1.5" />}
             Delete selected
@@ -433,14 +533,11 @@ export default function QuestionBank() {
             {hasFilters ? 'No questions match your filters.' : 'Your question bank is empty.'}
           </p>
           {!hasFilters && (
-            <p className="text-sm mt-1">
-              Add questions manually above, or save questions from the Exam Builder.
-            </p>
+            <p className="text-sm mt-1">Add questions manually above, or save questions from the Exam Builder.</p>
           )}
         </div>
       ) : (
         <>
-          {/* Select-all row */}
           <div className="flex items-center gap-3 px-1 mb-2">
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" className="rounded text-primary-600"
@@ -449,7 +546,7 @@ export default function QuestionBank() {
               <span className="text-xs text-slate-500">Select all on page</span>
             </label>
             <span className="text-xs text-slate-400 ml-auto">
-              {total} question{total !== 1 ? 's' : ''} · page {page} of {pages || 1}
+              page {page} of {pages || 1}
             </span>
           </div>
 
@@ -472,9 +569,7 @@ export default function QuestionBank() {
                     {q.topic       && <span className="text-xs text-slate-400">· {q.topic}</span>}
                     {q.grade_level && <span className="text-xs text-slate-400">· {q.grade_level}</span>}
                     {q.has_passage && (
-                      <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700">
-                        Passage
-                      </span>
+                      <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700">Passage</span>
                     )}
                   </div>
                 </div>
@@ -492,7 +587,6 @@ export default function QuestionBank() {
             ))}
           </div>
 
-          {/* Pagination */}
           {pages > 1 && (
             <div className="flex items-center justify-center gap-3 mt-6">
               <button disabled={page === 1} onClick={() => load(page - 1)}
@@ -505,7 +599,6 @@ export default function QuestionBank() {
         </>
       )}
 
-      {/* Modal */}
       {modal && (
         <QuestionModal mode={modal.mode} initial={modal.initial}
           onSave={handleSave} onClose={() => setModal(null)} saving={saving} />

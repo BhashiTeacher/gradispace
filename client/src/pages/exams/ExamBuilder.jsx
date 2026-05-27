@@ -73,6 +73,7 @@ function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove,
             ? <span className="text-[10px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full font-semibold">Short Answer</span>
             : q.answer && <span className="text-[10px] text-slate-400">Ans: <b>{q.answer}</b></span>}
           {q.audioUrl && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">🔊 Audio</span>}
+          {q.stimulus && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-semibold">📋 Stimulus</span>}
           {justSaved && (
             <span className="text-[10px] font-semibold text-green-600 flex items-center gap-0.5 animate-pulse">
               <CheckIcon className="w-3 h-3" /> Saved
@@ -111,6 +112,7 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
   const [diff, setDiff]               = useState(q.difficulty || 'medium');
   const [audioUrl, setAudioUrl]       = useState(q.audioUrl || q.audio_url || '');
   const [audioLimit, setAudioLimit]   = useState(q.audioPlayLimit ?? q.audio_play_limit ?? 3);
+  const [stimulus, setStimulus]       = useState(q.stimulus || null);
   const [errors, setErrors]           = useState({});
 
   function handleSave() {
@@ -127,6 +129,7 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
       difficulty:     diff,
       audioUrl:       isPro ? (audioUrl.trim() || null) : (q.audioUrl || q.audio_url || null),
       audioPlayLimit: isPro && audioUrl.trim() ? (parseInt(audioLimit) || null) : null,
+      stimulus:       isPro && stimulus && (stimulus.text?.trim() || stimulus.imageUrl?.trim()) ? stimulus : null,
     });
   }
 
@@ -260,6 +263,41 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
         </div>
       )}
 
+      {/* Stimulus / reading passage (Pro only) */}
+      {isPro && (
+        <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+              Stimulus Block <ProBadge />
+            </label>
+            {stimulus && (
+              <button type="button" onClick={() => setStimulus(null)}
+                className="text-xs text-red-400 hover:text-red-500">Remove</button>
+            )}
+          </div>
+          {!stimulus ? (
+            <button type="button"
+              onClick={() => setStimulus({ title: '', text: '', imageUrl: '' })}
+              className="btn-ghost btn-sm w-full text-xs">
+              + Add stimulus / reading passage
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <input className="input text-sm" value={stimulus.title}
+                onChange={e => setStimulus(s => ({ ...s, title: e.target.value }))}
+                placeholder="Title (optional)" />
+              <textarea className="input resize-none text-sm" rows={4}
+                value={stimulus.text}
+                onChange={e => setStimulus(s => ({ ...s, text: e.target.value }))}
+                placeholder="Stimulus text / reading passage…" />
+              <input className="input text-sm" value={stimulus.imageUrl}
+                onChange={e => setStimulus(s => ({ ...s, imageUrl: e.target.value }))}
+                placeholder="Image URL (optional)" />
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2 pt-1">
         <button onClick={handleSave} className="btn-primary btn-sm">Save Changes</button>
         <button onClick={onCancel} className="btn-ghost btn-sm">Cancel</button>
@@ -314,6 +352,7 @@ export default function ExamBuilder() {
   const [mType, setMType]             = useState('mcq');
   const [mAudioUrl, setMAudioUrl]     = useState('');
   const [mAudioLimit, setMAudioLimit] = useState(3);
+  const [mStimulus, setMStimulus]     = useState(null);
   const [mErrors, setMErrors]         = useState({});
 
   // ── AI tab state ──────────────────────────────────────────────────────────
@@ -374,6 +413,8 @@ export default function ExamBuilder() {
           topic:          q.topic,
           audioUrl:       q.audio_url || null,
           audioPlayLimit: q.audio_play_limit ?? null,
+          stimulus:       q.stimulus || null,
+          passage:        q.passage  || null,
           _lid:           makeId(),
           _source:        q.in_bank ? 'bank' : 'manual',
         })));
@@ -450,11 +491,12 @@ export default function ExamBuilder() {
       type: mType, difficulty: mDiff,
       audioUrl: isPro ? (mAudioUrl.trim() || null) : null,
       audioPlayLimit: isPro && mAudioUrl.trim() ? (parseInt(mAudioLimit) || null) : null,
+      stimulus: isPro && mStimulus && (mStimulus.text?.trim() || mStimulus.imageUrl?.trim()) ? mStimulus : null,
       subject, topic, _source: 'manual',
     });
     setMStem(''); setMOpts(['', '', '', '']); setMOptImgUrls(['', '', '', '']);
     setMAnswer(mType === 'mcq' ? 'A' : ''); setMDiff('medium');
-    setMAudioUrl(''); setMAudioLimit(3);
+    setMAudioUrl(''); setMAudioLimit(3); setMStimulus(null);
   }
 
   // ── AI: generate ─────────────────────────────────────────────────────────
@@ -963,6 +1005,41 @@ export default function ExamBuilder() {
                             ))}
                             <option value="">Unlimited</option>
                           </select>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Stimulus / reading passage (Pro only) */}
+                  {isPro && (
+                    <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                          Stimulus Block <ProBadge />
+                        </label>
+                        {mStimulus && (
+                          <button type="button" onClick={() => setMStimulus(null)}
+                            className="text-xs text-red-400 hover:text-red-500">Remove</button>
+                        )}
+                      </div>
+                      {!mStimulus ? (
+                        <button type="button"
+                          onClick={() => setMStimulus({ title: '', text: '', imageUrl: '' })}
+                          className="btn-ghost btn-sm w-full text-xs">
+                          + Add stimulus / reading passage
+                        </button>
+                      ) : (
+                        <div className="space-y-2">
+                          <input className="input text-sm" value={mStimulus.title}
+                            onChange={e => setMStimulus(s => ({ ...s, title: e.target.value }))}
+                            placeholder="Title (optional)" />
+                          <textarea className="input resize-none text-sm" rows={4}
+                            value={mStimulus.text}
+                            onChange={e => setMStimulus(s => ({ ...s, text: e.target.value }))}
+                            placeholder="Stimulus text / reading passage…" />
+                          <input className="input text-sm" value={mStimulus.imageUrl}
+                            onChange={e => setMStimulus(s => ({ ...s, imageUrl: e.target.value }))}
+                            placeholder="Image URL (optional)" />
                         </div>
                       )}
                     </div>

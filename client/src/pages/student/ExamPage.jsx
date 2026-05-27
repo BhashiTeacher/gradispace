@@ -97,6 +97,27 @@ function BrandHeader({ branding, title }) {
   );
 }
 
+// ── Stimulus block ────────────────────────────────────────────────────────────
+function StimulusBlock({ stimulus, colour }) {
+  if (!stimulus) return null;
+  return (
+    <div className="rounded-xl border-2 p-4 mb-4 space-y-3"
+      style={{ borderColor: colour + '44', background: colour + '08' }}>
+      {stimulus.title && (
+        <p className="text-sm font-semibold text-slate-800">{stimulus.title}</p>
+      )}
+      {stimulus.imageUrl && (
+        <img src={stimulus.imageUrl} alt="Stimulus"
+          className="w-full max-h-64 object-contain rounded-lg border border-slate-100"
+          onError={e => { e.currentTarget.style.display = 'none'; }} />
+      )}
+      {stimulus.text && (
+        <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{stimulus.text}</p>
+      )}
+    </div>
+  );
+}
+
 // ── Audio player ──────────────────────────────────────────────────────────────
 function AudioPlayer({ questionId, token, sessionToken, playsLimit, colour }) {
   const [playsUsed, setPlaysUsed] = useState(0);
@@ -164,8 +185,11 @@ function QuestionCard({ q, index, total, answer, onAnswer, colour, t, token, ses
       {q.part && <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">{q.part}</p>}
       {q.part_instruction && <p className="text-sm text-slate-500 italic mb-3 border-l-2 pl-3" style={{ borderColor: colour }}>{q.part_instruction}</p>}
 
-      {/* Passage */}
-      {q.passage && (
+      {/* Stimulus block */}
+      {q.stimulus && <StimulusBlock stimulus={q.stimulus} colour={colour} />}
+
+      {/* Passage (legacy per-question reading text) */}
+      {q.passage && !q.stimulus && (
         <div className="bg-slate-50 rounded-lg p-3 mb-4 text-sm text-slate-600 border border-slate-200">
           {q.passage.title && <p className="font-semibold mb-1">{q.passage.title}</p>}
           <p className="leading-relaxed">{q.passage.text}</p>

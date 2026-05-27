@@ -89,6 +89,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
              COALESCE(eq.stimulus, q.stimulus) AS stimulus,
              COALESCE(eq.image_url, q.image_url) AS image_url,
              COALESCE(eq.audio_url, q.audio_url) AS audio_url,
+             eq.audio_play_limit,
              COALESCE(eq.video_url, q.video_url) AS video_url
       FROM exam_questions eq
       JOIN questions q ON q.id = eq.question_id
@@ -172,8 +173,8 @@ router.put('/:id/questions', requireAuth, async (req, res, next) => {
         await client.query(`
           INSERT INTO exam_questions(
             exam_id,question_id,order_num,part,part_instruction,
-            stem,options,answer,type,passage,image_url,audio_url,video_url,stimulus
-          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+            stem,options,answer,type,passage,image_url,audio_url,video_url,stimulus,audio_play_limit
+          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
           [req.params.id, q.questionId, idx, q.part || 'Part 1', q.partInstruction || null,
            q.stem || null,
            q.options != null ? JSON.stringify(q.options) : null,
@@ -183,7 +184,8 @@ router.put('/:id/questions', requireAuth, async (req, res, next) => {
            q.imageUrl || null,
            q.audioUrl || null,
            q.videoUrl || null,
-           q.stimulus != null ? JSON.stringify(q.stimulus) : null]
+           q.stimulus != null ? JSON.stringify(q.stimulus) : null,
+           q.audioPlayLimit != null ? parseInt(q.audioPlayLimit) : null]
         );
       }
       await client.query('COMMIT');
@@ -208,19 +210,21 @@ router.put('/:id/questions', requireAuth, async (req, res, next) => {
 // PUT /api/v1/exams/:examId/questions/:questionId  — update exam snapshot only (no questions table touch)
 router.put('/:examId/questions/:questionId', requireAuth, async (req, res, next) => {
   try {
-    const { stem, options, answer, type, difficulty } = req.body;
+    const { stem, options, answer, type, audioUrl, audioPlayLimit } = req.body;
     const { rowCount } = await db.query(
       'SELECT 1 FROM exams WHERE id=$1 AND teacher_id=$2', [req.params.examId, req.teacherId]
     );
     if (!rowCount) return res.status(404).json({ error: 'not_found' });
     await db.query(`
       UPDATE exam_questions SET
-        stem=$1, options=$2, answer=$3, type=$4
-      WHERE exam_id=$5 AND question_id=$6`,
+        stem=$1, options=$2, answer=$3, type=$4, audio_url=$5, audio_play_limit=$6
+      WHERE exam_id=$7 AND question_id=$8`,
       [stem || null,
        options != null ? JSON.stringify(options) : null,
        answer || null,
        type || null,
+       audioUrl || null,
+       audioPlayLimit != null ? parseInt(audioPlayLimit) : null,
        req.params.examId, req.params.questionId]
     );
     res.json({ ok: true });

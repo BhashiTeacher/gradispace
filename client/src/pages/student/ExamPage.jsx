@@ -97,8 +97,66 @@ function BrandHeader({ branding, title }) {
   );
 }
 
+// ── Audio player ──────────────────────────────────────────────────────────────
+function AudioPlayer({ questionId, token, sessionToken, playsLimit, colour }) {
+  const [playsUsed, setPlaysUsed] = useState(0);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const audioRef                  = useRef(null);
+
+  const limit     = playsLimit != null ? parseInt(playsLimit) : null;
+  const remaining = limit != null ? limit - playsUsed : Infinity;
+  const exhausted = remaining <= 0;
+
+  async function handlePlay() {
+    if (exhausted || loading) return;
+    setLoading(true); setError('');
+    try {
+      const data = await sPost(`/student/exam/${token}/audio-play`, { sessionToken, questionId });
+      setPlaysUsed(data.playsUsed);
+      if (audioRef.current) {
+        audioRef.current.src = data.audioUrl;
+        await audioRef.current.play();
+      }
+    } catch (err) {
+      if (err.code === 'play_limit_reached') {
+        setPlaysUsed(limit);
+        setError('Maximum plays reached.');
+      } else {
+        setError('Could not load audio.');
+      }
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <div className="flex items-center gap-3 bg-slate-50 rounded-xl p-3 mb-4 border border-slate-200">
+      <button onClick={handlePlay} disabled={exhausted || loading}
+        className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
+        style={{ background: exhausted ? '#94a3b8' : colour }}>
+        {loading
+          ? <Spinner className="w-4 h-4 text-white" />
+          : (
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-white ml-0.5">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
+      </button>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-slate-700">Audio clip</p>
+        {limit != null && (
+          <p className={`text-xs mt-0.5 ${exhausted ? 'text-red-500 font-medium' : 'text-slate-500'}`}>
+            {exhausted ? 'No plays remaining' : `${remaining} play${remaining !== 1 ? 's' : ''} remaining`}
+          </p>
+        )}
+        {error && <p className="text-xs text-red-500 mt-0.5">{error}</p>}
+      </div>
+      <audio ref={audioRef} />
+    </div>
+  );
+}
+
 // ── Single question ────────────────────────────────────────────────────────────
-function QuestionCard({ q, index, total, answer, onAnswer, colour, t }) {
+function QuestionCard({ q, index, total, answer, onAnswer, colour, t, token, sessionToken }) {
   const options = Array.isArray(q.options) ? q.options : [];
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 md:p-6">
@@ -117,6 +175,12 @@ function QuestionCard({ q, index, total, answer, onAnswer, colour, t }) {
       {/* Question number + stem */}
       <p className="text-xs text-slate-400 mb-1">{t.qOf(index + 1, total)}</p>
       <p className="text-base font-medium text-slate-900 leading-snug mb-5">{q.stem}</p>
+
+      {/* Audio player */}
+      {q.has_audio && (
+        <AudioPlayer questionId={q.id} token={token} sessionToken={sessionToken}
+          playsLimit={q.audio_play_limit} colour={colour} />
+      )}
 
       {/* MCQ options */}
       {q.type === 'mcq' && (
@@ -385,14 +449,16 @@ export default function ExamPage() {
           {/* Paginated: single question */}
           {paginated && q && (
             <QuestionCard q={q} index={currentQ} total={questions.length}
-              answer={answers[q.id]} onAnswer={setAnswer} colour={colour} t={t} />
+              answer={answers[q.id]} onAnswer={setAnswer} colour={colour} t={t}
+              token={token} sessionToken={sessionToken} />
           )}
 
           {/* Scrollable: all questions */}
           {!paginated && questions.map((q, i) => (
             <div key={q.id} className="mb-4">
               <QuestionCard q={q} index={i} total={questions.length}
-                answer={answers[q.id]} onAnswer={setAnswer} colour={colour} t={t} />
+                answer={answers[q.id]} onAnswer={setAnswer} colour={colour} t={t}
+                token={token} sessionToken={sessionToken} />
             </div>
           ))}
         </div>

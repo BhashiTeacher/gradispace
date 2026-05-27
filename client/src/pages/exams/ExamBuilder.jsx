@@ -72,6 +72,7 @@ function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove,
           {q.type === 'short_answer'
             ? <span className="text-[10px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full font-semibold">Short Answer</span>
             : q.answer && <span className="text-[10px] text-slate-400">Ans: <b>{q.answer}</b></span>}
+          {q.audioUrl && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">🔊 Audio</span>}
           {justSaved && (
             <span className="text-[10px] font-semibold text-green-600 flex items-center gap-0.5 animate-pulse">
               <CheckIcon className="w-3 h-3" /> Saved
@@ -104,11 +105,13 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
   const [optImgUrls, setOptImgUrls] = useState(() =>
     ['A', 'B', 'C', 'D'].map(l => q.options?.find(o => o.letter === l)?.imageUrl || '')
   );
-  const [answer, setAnswer] = useState(
+  const [answer, setAnswer]           = useState(
     q.type === 'short_answer' ? (q.answer || '') : (q.answer || 'A')
   );
-  const [diff, setDiff]     = useState(q.difficulty || 'medium');
-  const [errors, setErrors] = useState({});
+  const [diff, setDiff]               = useState(q.difficulty || 'medium');
+  const [audioUrl, setAudioUrl]       = useState(q.audioUrl || q.audio_url || '');
+  const [audioLimit, setAudioLimit]   = useState(q.audioPlayLimit ?? q.audio_play_limit ?? 3);
+  const [errors, setErrors]           = useState({});
 
   function handleSave() {
     const e = {};
@@ -118,10 +121,12 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
     onSave({
       ...q,
       type,
-      stem:       stem.trim(),
-      options:    type === 'mcq' ? toApiOptions(opts, optImgUrls) : [],
-      answer:     type === 'mcq' ? answer : (answer.trim() || null),
-      difficulty: diff,
+      stem:           stem.trim(),
+      options:        type === 'mcq' ? toApiOptions(opts, optImgUrls) : [],
+      answer:         type === 'mcq' ? answer : (answer.trim() || null),
+      difficulty:     diff,
+      audioUrl:       isPro ? (audioUrl.trim() || null) : (q.audioUrl || q.audio_url || null),
+      audioPlayLimit: isPro && audioUrl.trim() ? (parseInt(audioLimit) || null) : null,
     });
   }
 
@@ -230,6 +235,31 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
         </div>
       )}
 
+      {/* Audio (Pro only) */}
+      {isPro && (
+        <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+          <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+            Audio Clip <ProBadge />
+          </label>
+          <input className="input text-sm" value={audioUrl}
+            onChange={e => setAudioUrl(e.target.value)}
+            placeholder="Audio URL (MP3, WAV, OGG…)" />
+          {audioUrl.trim() && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
+              <select className="input w-32 text-sm"
+                value={audioLimit}
+                onChange={e => setAudioLimit(e.target.value)}>
+                {[1, 2, 3, 5, 10].map(n => (
+                  <option key={n} value={n}>{n} time{n > 1 ? 's' : ''}</option>
+                ))}
+                <option value="">Unlimited</option>
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2 pt-1">
         <button onClick={handleSave} className="btn-primary btn-sm">Save Changes</button>
         <button onClick={onCancel} className="btn-ghost btn-sm">Cancel</button>
@@ -281,8 +311,10 @@ export default function ExamBuilder() {
   const [mOptImgUrls, setMOptImgUrls] = useState(['', '', '', '']);
   const [mAnswer, setMAnswer]     = useState('A');
   const [mDiff, setMDiff]     = useState('medium');
-  const [mType, setMType]     = useState('mcq');
-  const [mErrors, setMErrors] = useState({});
+  const [mType, setMType]             = useState('mcq');
+  const [mAudioUrl, setMAudioUrl]     = useState('');
+  const [mAudioLimit, setMAudioLimit] = useState(3);
+  const [mErrors, setMErrors]         = useState({});
 
   // ── AI tab state ──────────────────────────────────────────────────────────
   const [aiPrompt, setAiPrompt]     = useState('');
@@ -332,16 +364,18 @@ export default function ExamBuilder() {
           setPublishModal({ open: false, link, token: exam.access_token });
         }
         setQuestions((qs || []).map(q => ({
-          id:         q.id,
-          stem:       q.stem,
-          options:    q.options || [],
-          answer:     q.answer  || '',
-          type:       q.type    || 'mcq',
-          difficulty: q.difficulty || 'medium',
-          subject:    q.subject,
-          topic:      q.topic,
-          _lid:       makeId(),
-          _source:    q.in_bank ? 'bank' : 'manual',
+          id:             q.id,
+          stem:           q.stem,
+          options:        q.options || [],
+          answer:         q.answer  || '',
+          type:           q.type    || 'mcq',
+          difficulty:     q.difficulty || 'medium',
+          subject:        q.subject,
+          topic:          q.topic,
+          audioUrl:       q.audio_url || null,
+          audioPlayLimit: q.audio_play_limit ?? null,
+          _lid:           makeId(),
+          _source:        q.in_bank ? 'bank' : 'manual',
         })));
       })
       .catch(() => toast('Could not load exam.', 'error'))
@@ -414,11 +448,13 @@ export default function ExamBuilder() {
       options: mType === 'mcq' ? toApiOptions(mOpts, mOptImgUrls) : [],
       answer: mType === 'mcq' ? mAnswer : (mAnswer.trim() || null),
       type: mType, difficulty: mDiff,
+      audioUrl: isPro ? (mAudioUrl.trim() || null) : null,
+      audioPlayLimit: isPro && mAudioUrl.trim() ? (parseInt(mAudioLimit) || null) : null,
       subject, topic, _source: 'manual',
     });
     setMStem(''); setMOpts(['', '', '', '']); setMOptImgUrls(['', '', '', '']);
-    setMAnswer(mType === 'mcq' ? 'A' : '');
-    setMDiff('medium');
+    setMAnswer(mType === 'mcq' ? 'A' : ''); setMDiff('medium');
+    setMAudioUrl(''); setMAudioLimit(3);
   }
 
   // ── AI: generate ─────────────────────────────────────────────────────────
@@ -512,6 +548,8 @@ export default function ExamBuilder() {
       options: q.options || [], answer: q.answer || '',
       type: q.type || 'mcq', difficulty: q.difficulty || 'medium',
       subject: q.subject, topic: q.topic,
+      audioUrl: q.audio_url || q.audioUrl || null,
+      audioPlayLimit: null,
       _source: 'bank',
     });
   }
@@ -568,17 +606,18 @@ export default function ExamBuilder() {
       // Set ordered question list on exam — include full snapshot data so bank and paper are independent
       await api.put(`/exams/${currentId}/questions`, {
         questions: saved.map(q => ({
-          questionId:  q.id,
-          part:        'Part 1',
-          stem:        q.stem        || null,
-          options:     q.options     || [],
-          answer:      q.answer      || null,
-          type:        q.type        || 'mcq',
-          passage:     q.passage     || null,
-          imageUrl:    q.imageUrl    || null,
-          audioUrl:    q.audioUrl    || null,
-          videoUrl:    q.videoUrl    || null,
-          stimulus:    q.stimulus    || null,
+          questionId:     q.id,
+          part:           'Part 1',
+          stem:           q.stem           || null,
+          options:        q.options        || [],
+          answer:         q.answer         || null,
+          type:           q.type           || 'mcq',
+          passage:        q.passage        || null,
+          imageUrl:       q.imageUrl       || null,
+          audioUrl:       q.audioUrl       || null,
+          videoUrl:       q.videoUrl       || null,
+          stimulus:       q.stimulus       || null,
+          audioPlayLimit: q.audioPlayLimit ?? null,
         })),
       });
 
@@ -606,10 +645,12 @@ export default function ExamBuilder() {
     if (examId && updated.id) {
       try {
         await api.put(`/exams/${examId}/questions/${updated.id}`, {
-          stem:    updated.stem,
-          options: updated.options,
-          answer:  updated.answer,
-          type:    updated.type,
+          stem:           updated.stem,
+          options:        updated.options,
+          answer:         updated.answer,
+          type:           updated.type,
+          audioUrl:       updated.audioUrl       || null,
+          audioPlayLimit: updated.audioPlayLimit ?? null,
         });
         setJustSavedId(updated.id);
         setTimeout(() => setJustSavedId(null), 2000);
@@ -899,6 +940,31 @@ export default function ExamBuilder() {
                           <option value="hard">Hard</option>
                         </select>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Audio clip (Pro only) */}
+                  {isPro && (
+                    <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+                      <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                        Audio Clip <ProBadge />
+                      </label>
+                      <input className="input text-sm" value={mAudioUrl}
+                        onChange={e => setMAudioUrl(e.target.value)}
+                        placeholder="Audio URL (MP3, WAV, OGG…)" />
+                      {mAudioUrl.trim() && (
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
+                          <select className="input w-32 text-sm"
+                            value={mAudioLimit}
+                            onChange={e => setMAudioLimit(e.target.value)}>
+                            {[1, 2, 3, 5, 10].map(n => (
+                              <option key={n} value={n}>{n} time{n > 1 ? 's' : ''}</option>
+                            ))}
+                            <option value="">Unlimited</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   )}
 

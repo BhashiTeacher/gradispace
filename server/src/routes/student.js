@@ -23,6 +23,7 @@ router.get('/exam/:token', async (req, res, next) => {
              COALESCE(eq.options, q.options) AS options,
              COALESCE(eq.image_url, q.image_url) AS image_url,
              COALESCE(eq.audio_url, q.audio_url) AS audio_url,
+             eq.audio_play_limit,
              COALESCE(eq.video_url, q.video_url) AS video_url,
              COALESCE(eq.passage, q.passage) AS passage,
              COALESCE(eq.stimulus, q.stimulus) AS stimulus
@@ -32,10 +33,10 @@ router.get('/exam/:token', async (req, res, next) => {
       ORDER BY eq.order_num
     `, [exam.id]);
 
-    // Strip correct answers
+    // Strip correct answers and audio URLs (URL served via play endpoint for limit tracking)
     const questions = qRows.map(q => {
-      const { answer: _a, stem_hash: _h, ...safe } = q;
-      return safe;
+      const { answer: _a, stem_hash: _h, audio_url, ...safe } = q;
+      return { ...safe, has_audio: !!audio_url };
     });
 
     res.json({
@@ -135,6 +136,53 @@ router.post('/exam/:token/submit', async (req, res, next) => {
     `, [JSON.stringify(answers), correct, total, pct, grade, timeTaken, JSON.stringify(breakdown), sessionToken]);
 
     res.json({ result: { correct, total, pct, grade, timeTaken, breakdown, answers: answerDetail } });
+  } catch (err) { next(err); }
+});
+
+// POST /api/v1/student/exam/:token/audio-play
+router.post('/exam/:token/audio-play', async (req, res, next) => {
+  try {
+    const { sessionToken, questionId } = req.body;
+    if (!sessionToken || !questionId)
+      return res.status(400).json({ error: 'validation_error', message: 'sessionToken and questionId are required.' });
+
+    const { rows: sRows } = await db.query(
+      'SELECT s.*, e.id AS eid FROM submissions s JOIN exams e ON e.id=s.exam_id WHERE s.session_token=$1 AND e.access_token=$2',
+      [sessionToken, req.params.token]
+    );
+    if (!sRows[0]) return res.status(404).json({ error: 'not_found' });
+    const sub = sRows[0];
+    if (sub.submitted_at) return res.status(409).json({ error: 'already_submitted' });
+
+    const { rows: eqRows } = await db.query(
+      `SELECT COALESCE(eq.audio_url, q.audio_url) AS audio_url, eq.audio_play_limit
+       FROM exam_questions eq JOIN questions q ON q.id=eq.question_id
+       WHERE eq.exam_id=$1 AND q.id=$2`,
+      [sub.eid, questionId]
+    );
+    if (!eqRows[0] || !eqRows[0].audio_url)
+      return res.status(404).json({ error: 'not_found', message: 'No audio for this question.' });
+
+    const { audio_url, audio_play_limit } = eqRows[0];
+    const audioPlays = sub.audio_plays || {};
+    const currentPlays = audioPlays[questionId] || 0;
+
+    if (audio_play_limit !== null && currentPlays >= audio_play_limit) {
+      return res.status(403).json({
+        error: 'play_limit_reached',
+        message: 'Maximum plays reached.',
+        playsUsed: currentPlays,
+        playsLimit: audio_play_limit,
+      });
+    }
+
+    const newPlays = currentPlays + 1;
+    await db.query(
+      'UPDATE submissions SET audio_plays=$1 WHERE session_token=$2',
+      [JSON.stringify({ ...audioPlays, [questionId]: newPlays }), sessionToken]
+    );
+
+    res.json({ audioUrl: audio_url, playsUsed: newPlays, playsLimit: audio_play_limit });
   } catch (err) { next(err); }
 });
 

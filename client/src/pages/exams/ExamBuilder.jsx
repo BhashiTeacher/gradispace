@@ -15,8 +15,11 @@ import { ProBadge } from '../../components/UI/ProGate';
 let _lid = 0;
 const makeId = () => `q_${++_lid}_${Date.now()}`;
 
-const toApiOptions = (arr) =>
-  ['A', 'B', 'C', 'D'].map((letter, i) => ({ letter, text: arr[i] || '' }));
+const toApiOptions = (texts, imgUrls = []) =>
+  ['A', 'B', 'C', 'D'].map((letter, i) => ({
+    letter, text: texts[i] || '',
+    ...(imgUrls[i]?.trim() ? { imageUrl: imgUrls[i].trim() } : {}),
+  }));
 
 // ─── Small presentational components ─────────────────────────────────────────
 
@@ -95,8 +98,11 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
   const navigate  = useNavigate();
   const [type, setType]     = useState(q.type || 'mcq');
   const [stem, setStem]     = useState(q.stem || '');
-  const [opts, setOpts]     = useState(() =>
+  const [opts, setOpts]         = useState(() =>
     ['A', 'B', 'C', 'D'].map(l => q.options?.find(o => o.letter === l)?.text || '')
+  );
+  const [optImgUrls, setOptImgUrls] = useState(() =>
+    ['A', 'B', 'C', 'D'].map(l => q.options?.find(o => o.letter === l)?.imageUrl || '')
   );
   const [answer, setAnswer] = useState(
     q.type === 'short_answer' ? (q.answer || '') : (q.answer || 'A')
@@ -113,7 +119,7 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
       ...q,
       type,
       stem:       stem.trim(),
-      options:    type === 'mcq' ? ['A', 'B', 'C', 'D'].map((letter, i) => ({ letter, text: opts[i] || '' })) : [],
+      options:    type === 'mcq' ? toApiOptions(opts, optImgUrls) : [],
       answer:     type === 'mcq' ? answer : (answer.trim() || null),
       difficulty: diff,
     });
@@ -168,6 +174,12 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
                 <input className={`input ${errors.opts && i < 2 ? 'border-red-400' : ''}`}
                   value={opts[i]}
                   onChange={e => { const n = [...opts]; n[i] = e.target.value; setOpts(n); }} />
+                {isPro && (
+                  <input className="input mt-1 text-xs text-slate-500"
+                    value={optImgUrls[i]}
+                    onChange={e => { const n = [...optImgUrls]; n[i] = e.target.value; setOptImgUrls(n); }}
+                    placeholder="Image URL (optional)" />
+                )}
               </div>
             ))}
           </div>
@@ -265,8 +277,9 @@ export default function ExamBuilder() {
 
   // ── Manual tab state ──────────────────────────────────────────────────────
   const [mStem, setMStem]     = useState('');
-  const [mOpts, setMOpts]     = useState(['', '', '', '']);
-  const [mAnswer, setMAnswer] = useState('A');
+  const [mOpts, setMOpts]         = useState(['', '', '', '']);
+  const [mOptImgUrls, setMOptImgUrls] = useState(['', '', '', '']);
+  const [mAnswer, setMAnswer]     = useState('A');
   const [mDiff, setMDiff]     = useState('medium');
   const [mType, setMType]     = useState('mcq');
   const [mErrors, setMErrors] = useState({});
@@ -398,12 +411,12 @@ export default function ExamBuilder() {
     setMErrors({});
     addToExam({
       id: null, stem: mStem.trim(),
-      options: mType === 'mcq' ? toApiOptions(mOpts) : [],
+      options: mType === 'mcq' ? toApiOptions(mOpts, mOptImgUrls) : [],
       answer: mType === 'mcq' ? mAnswer : (mAnswer.trim() || null),
       type: mType, difficulty: mDiff,
       subject, topic, _source: 'manual',
     });
-    setMStem(''); setMOpts(['', '', '', '']);
+    setMStem(''); setMOpts(['', '', '', '']); setMOptImgUrls(['', '', '', '']);
     setMAnswer(mType === 'mcq' ? 'A' : '');
     setMDiff('medium');
   }
@@ -820,6 +833,7 @@ export default function ExamBuilder() {
                           <div key={letter}>
                             <label className="label text-xs">
                               Option {letter} {i < 2 && <span className="text-red-400">*</span>}
+                              {isPro && i === 0 && <span className="text-[10px] text-slate-400 normal-case font-normal ml-1">· add images below</span>}
                             </label>
                             <input
                               className={`input ${mErrors.opts && i < 2 ? 'border-red-400' : ''}`}
@@ -828,6 +842,12 @@ export default function ExamBuilder() {
                                 const n = [...mOpts]; n[i] = e.target.value; setMOpts(n);
                               }}
                               placeholder={`Option ${letter}`} />
+                            {isPro && (
+                              <input className="input mt-1 text-xs text-slate-500"
+                                value={mOptImgUrls[i]}
+                                onChange={e => { const n = [...mOptImgUrls]; n[i] = e.target.value; setMOptImgUrls(n); }}
+                                placeholder="Image URL (optional)" />
+                            )}
                           </div>
                         ))}
                       </div>

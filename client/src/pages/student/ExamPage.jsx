@@ -133,7 +133,14 @@ function QuestionCard({ q, index, total, answer, onAnswer, colour, t }) {
                   style={selected ? { background: colour, borderColor: colour, color: 'white' } : { borderColor: '#CBD5E1' }}>
                   {opt.letter}
                 </span>
-                <span className="flex-1 leading-snug">{opt.text}</span>
+                <span className="flex-1 leading-snug">
+                  {opt.imageUrl && (
+                    <img src={opt.imageUrl} alt={`Option ${opt.letter}`}
+                      className="w-full max-h-40 object-contain rounded-lg mb-2 border border-slate-100"
+                      onError={e => { e.currentTarget.style.display = 'none'; }} />
+                  )}
+                  {opt.text}
+                </span>
               </button>
             );
           })}

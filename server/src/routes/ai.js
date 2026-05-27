@@ -135,4 +135,52 @@ Preserve all stimulus/context boxes. No markdown. Just the JSON array.`;
   } catch (err) { next(err); }
 });
 
+// POST /api/v1/ai/from-image
+router.post('/from-image', requireAuth, checkAiLimit, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No image uploaded.' });
+    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowed.includes(req.file.mimetype))
+      return res.status(400).json({ error: 'validation_error', message: 'Image must be JPEG, PNG, GIF, or WebP.' });
+    if (req.file.size > 5 * 1024 * 1024)
+      return res.status(400).json({ error: 'validation_error', message: 'Image must be under 5 MB.' });
+
+    const { subject, topic, gradeLevel, difficulty = 'medium', count = 10 } = req.body;
+    const n = Math.min(Math.max(parseInt(count) || 10, 1), 50);
+    const base64 = req.file.buffer.toString('base64');
+
+    const system = `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.
+Examine the image carefully and generate exactly ${n} multiple-choice questions at ${difficulty} difficulty.
+The questions must test understanding of the specific content shown in the image.
+Return ONLY a valid JSON array:
+[{
+  "type": "mcq",
+  "stem": "question text",
+  "options": [{"letter":"A","text":"..."},{"letter":"B","text":"..."},{"letter":"C","text":"..."},{"letter":"D","text":"..."}],
+  "answer": "A",
+  "subject": "${subject || ''}",
+  "gradeLevel": "${gradeLevel || ''}",
+  "topic": "${topic || ''}",
+  "difficulty": "${difficulty}"
+}]
+No markdown, no explanation, just the JSON array.`;
+
+    const aiRes = await callClaude([{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: req.file.mimetype, data: base64 } },
+        { type: 'text', text: `Generate ${n} exam questions based on this image.${topic ? ` Topic: ${topic}.` : ''}` }
+      ],
+    }], system);
+
+    const raw = aiRes.content?.[0]?.text || '';
+    const questions = salvageJSON(raw);
+
+    await incrementAiUsage(req.teacherId);
+    const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
+    const used = rows[0]?.ai_usage_month || 0;
+    res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

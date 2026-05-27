@@ -356,6 +356,7 @@ export default function ExamBuilder() {
   const [mErrors, setMErrors]         = useState({});
 
   // ── AI tab state ──────────────────────────────────────────────────────────
+  const [aiMode, setAiMode]         = useState('text'); // 'text' | 'image'
   const [aiPrompt, setAiPrompt]     = useState('');
   const [aiSubject, setAiSubject]   = useState('');
   const [aiCount, setAiCount]       = useState(10);
@@ -364,6 +365,9 @@ export default function ExamBuilder() {
   const [aiLoading, setAiLoading]   = useState(false);
   const [aiResults, setAiResults]   = useState([]);
   const [aiSel, setAiSel]           = useState(new Set());
+  const aiImgInputRef               = useRef(null);
+  const [aiImgFile, setAiImgFile]   = useState(null);
+  const [aiImgName, setAiImgName]   = useState('');
 
   // ── PDF tab state ─────────────────────────────────────────────────────────
   const pdfInputRef                     = useRef(null);
@@ -542,6 +546,37 @@ export default function ExamBuilder() {
     addManyToExam(sel);
     setAiResults([]); setAiSel(new Set());
     toast(`${sel.length} questions added to exam.`, 'success');
+  }
+
+  // ── AI: generate from image ───────────────────────────────────────────────
+  async function handleAiFromImage() {
+    if (!aiImgFile) { toast('Select an image first.', 'error'); return; }
+    setAiLoading(true); setAiResults([]);
+    try {
+      const fd = new FormData();
+      fd.append('file', aiImgFile);
+      fd.append('count', Math.min(Math.max(parseInt(aiCount) || 10, 1), 50));
+      fd.append('difficulty', aiDiff);
+      fd.append('subject', aiSubject || subject || '');
+      fd.append('topic', topic || '');
+      fd.append('gradeLevel', gradeLevel || '');
+      const { questions: qs } = await api.upload('/ai/from-image', fd);
+      const normalized = qs.map(q => ({
+        id: null, stem: q.stem,
+        options: q.options || toApiOptions(['', '', '', '']),
+        answer: q.answer || 'A',
+        type: q.type || 'mcq',
+        difficulty: q.difficulty || aiDiff,
+        subject: q.subject || aiSubject || subject,
+        topic: q.topic || topic,
+        _source: 'ai',
+      }));
+      setAiResults(normalized);
+      setAiSel(new Set(normalized.map((_, i) => i)));
+      toast(`${normalized.length} questions generated.`, 'success');
+    } catch (err) {
+      toast(err.message || 'AI generation from image failed.', 'error');
+    } finally { setAiLoading(false); }
   }
 
   // ── PDF: extract ─────────────────────────────────────────────────────────
@@ -1054,46 +1089,118 @@ export default function ExamBuilder() {
               {/* ── AI tab ── */}
               {activeTab === 'ai' && (
                 <div className="space-y-4">
-                  <div>
-                    <label className="label">What should the questions be about?</label>
-                    <textarea className="input resize-none" rows={4}
-                      value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
-                      placeholder="Describe the topic, paste a passage, or give specific instructions — e.g. 'Generate 10 questions about the water cycle for Grade 8.'" />
+                  {/* Mode toggle */}
+                  <div className="flex gap-2">
+                    <label className={`flex-1 flex items-center justify-center py-2 rounded-lg border-2 cursor-pointer text-sm font-medium transition-colors
+                      ${aiMode === 'text' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                      <input type="radio" className="sr-only" checked={aiMode === 'text'}
+                        onChange={() => { setAiMode('text'); setAiResults([]); setAiSel(new Set()); }} />
+                      Text Prompt
+                    </label>
+                    <label
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 text-sm font-medium transition-colors cursor-pointer
+                        ${!isPro ? 'opacity-80' : ''}
+                        ${aiMode === 'image' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                      onClick={() => { if (!isPro) { navigate('/billing'); return; } setAiMode('image'); setAiResults([]); setAiSel(new Set()); }}>
+                      From Image <ProBadge />
+                    </label>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div>
-                      <label className="label">Count</label>
-                      <input className="input" type="number" min="1" max="50"
-                        value={aiCount} onChange={e => setAiCount(e.target.value)} />
-                    </div>
-                    <div>
-                      <label className="label">Difficulty</label>
-                      <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
-                        <option value="easy">Easy</option>
-                        <option value="medium">Medium</option>
-                        <option value="hard">Hard</option>
-                      </select>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="label">Subject override</label>
-                      <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
-                        placeholder={subject || 'Uses exam subject'} />
-                    </div>
-                  </div>
+                  {/* Text prompt mode */}
+                  {aiMode === 'text' && (
+                    <>
+                      <div>
+                        <label className="label">What should the questions be about?</label>
+                        <textarea className="input resize-none" rows={4}
+                          value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
+                          placeholder="Describe the topic, paste a passage, or give specific instructions — e.g. 'Generate 10 questions about the water cycle for Grade 8.'" />
+                      </div>
 
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" className="rounded text-primary-600"
-                      checked={aiPassage} onChange={e => setAiPassage(e.target.checked)} />
-                    <span className="text-sm text-slate-600">Include a reading passage with each question</span>
-                  </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="label">Count</label>
+                          <input className="input" type="number" min="1" max="50"
+                            value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="label">Difficulty</label>
+                          <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                            <option value="easy">Easy</option>
+                            <option value="medium">Medium</option>
+                            <option value="hard">Hard</option>
+                          </select>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="label">Subject override</label>
+                          <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
+                            placeholder={subject || 'Uses exam subject'} />
+                        </div>
+                      </div>
 
-                  <button onClick={handleAiGenerate} disabled={aiLoading} className="btn-primary w-full">
-                    {aiLoading
-                      ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
-                      : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate Questions</>}
-                  </button>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" className="rounded text-primary-600"
+                          checked={aiPassage} onChange={e => setAiPassage(e.target.checked)} />
+                        <span className="text-sm text-slate-600">Include a reading passage with each question</span>
+                      </label>
 
+                      <button onClick={handleAiGenerate} disabled={aiLoading} className="btn-primary w-full">
+                        {aiLoading
+                          ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
+                          : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate Questions</>}
+                      </button>
+                    </>
+                  )}
+
+                  {/* From image mode (Pro) */}
+                  {aiMode === 'image' && (
+                    <>
+                      <div
+                        className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                        onClick={() => aiImgInputRef.current?.click()}>
+                        <SparklesIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                        {aiImgName
+                          ? <p className="text-sm font-medium text-slate-700">{aiImgName}</p>
+                          : <p className="text-sm text-slate-500">Drop an image or click to browse</p>}
+                        <p className="text-xs text-slate-400 mt-1">JPEG, PNG, WebP · Max 5 MB</p>
+                        <input ref={aiImgInputRef} type="file" accept="image/*" className="hidden"
+                          onChange={e => {
+                            const f = e.target.files?.[0] || null;
+                            setAiImgFile(f); setAiImgName(f?.name || '');
+                            setAiResults([]); setAiSel(new Set());
+                          }} />
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="label">Count</label>
+                          <input className="input" type="number" min="1" max="50"
+                            value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="label">Difficulty</label>
+                          <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                            <option value="easy">Easy</option>
+                            <option value="medium">Medium</option>
+                            <option value="hard">Hard</option>
+                          </select>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="label">Subject override</label>
+                          <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
+                            placeholder={subject || 'Uses exam subject'} />
+                        </div>
+                      </div>
+
+                      <button onClick={handleAiFromImage} disabled={aiLoading || !aiImgFile}
+                        className="btn-primary w-full">
+                        {aiLoading
+                          ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
+                          : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate from Image</>}
+                      </button>
+                    </>
+                  )}
+
+                  {/* Shared results section */}
                   {aiResults.length > 0 && (
                     <div className="space-y-2 pt-2 border-t border-slate-200">
                       <div className="flex items-center justify-between">

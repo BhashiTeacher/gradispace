@@ -66,7 +66,9 @@ function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove,
         <div className="flex items-center gap-1.5 flex-wrap">
           <SourceBadge source={q._source} />
           <DiffBadge value={q.difficulty} />
-          {q.answer && <span className="text-[10px] text-slate-400">Ans: <b>{q.answer}</b></span>}
+          {q.type === 'short_answer'
+            ? <span className="text-[10px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full font-semibold">Short Answer</span>
+            : q.answer && <span className="text-[10px] text-slate-400">Ans: <b>{q.answer}</b></span>}
           {justSaved && (
             <span className="text-[10px] font-semibold text-green-600 flex items-center gap-0.5 animate-pulse">
               <CheckIcon className="w-3 h-3" /> Saved
@@ -89,24 +91,30 @@ function QuestionItem({ q, index, total, onMoveUp, onMoveDown, onEdit, onRemove,
 }
 
 function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCancel }) {
+  const { isPro } = useAuth();
+  const navigate  = useNavigate();
+  const [type, setType]     = useState(q.type || 'mcq');
   const [stem, setStem]     = useState(q.stem || '');
   const [opts, setOpts]     = useState(() =>
     ['A', 'B', 'C', 'D'].map(l => q.options?.find(o => o.letter === l)?.text || '')
   );
-  const [answer, setAnswer] = useState(q.answer || 'A');
+  const [answer, setAnswer] = useState(
+    q.type === 'short_answer' ? (q.answer || '') : (q.answer || 'A')
+  );
   const [diff, setDiff]     = useState(q.difficulty || 'medium');
   const [errors, setErrors] = useState({});
 
   function handleSave() {
     const e = {};
-    if (!stem.trim())                          e.stem = 'Question text is required.';
-    if (!opts[0].trim() || !opts[1].trim())    e.opts = 'At least options A and B are required.';
+    if (!stem.trim()) e.stem = 'Question text is required.';
+    if (type === 'mcq' && (!opts[0].trim() || !opts[1].trim())) e.opts = 'At least options A and B are required.';
     if (Object.keys(e).length) { setErrors(e); return; }
     onSave({
       ...q,
+      type,
       stem:       stem.trim(),
-      options:    ['A', 'B', 'C', 'D'].map((letter, i) => ({ letter, text: opts[i] || '' })),
-      answer,
+      options:    type === 'mcq' ? ['A', 'B', 'C', 'D'].map((letter, i) => ({ letter, text: opts[i] || '' })) : [],
+      answer:     type === 'mcq' ? answer : (answer.trim() || null),
       difficulty: diff,
     });
   }
@@ -126,47 +134,90 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
           </button>
         </div>
       </div>
+
+      {/* Type selector */}
+      <div className="flex gap-2">
+        <label className={`flex-1 flex items-center justify-center py-2 rounded-lg border-2 cursor-pointer text-sm font-medium transition-colors
+          ${type === 'mcq' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+          <input type="radio" className="sr-only" checked={type === 'mcq'}
+            onChange={() => { setType('mcq'); setAnswer('A'); }} />
+          Multiple Choice
+        </label>
+        <label
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 text-sm font-medium transition-colors cursor-pointer
+            ${!isPro ? 'opacity-80' : ''}
+            ${type === 'short_answer' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}
+          onClick={() => { if (!isPro) { navigate('/billing'); return; } setType('short_answer'); setAnswer(''); }}>
+          Short Answer <ProBadge />
+        </label>
+      </div>
+
       <div>
         <label className="label">Question text</label>
         <textarea className={`input resize-none ${errors.stem ? 'border-red-400' : ''}`}
           rows={3} value={stem} onChange={e => setStem(e.target.value)} />
         {errors.stem && <p className="text-xs text-red-500 mt-1">{errors.stem}</p>}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {['A', 'B', 'C', 'D'].map((letter, i) => (
-          <div key={letter}>
-            <label className="label text-xs">Option {letter}{i < 2 && <span className="text-red-400"> *</span>}</label>
-            <input className={`input ${errors.opts && i < 2 ? 'border-red-400' : ''}`}
-              value={opts[i]}
-              onChange={e => { const n = [...opts]; n[i] = e.target.value; setOpts(n); }} />
-          </div>
-        ))}
-      </div>
-      {errors.opts && <p className="text-xs text-red-500">{errors.opts}</p>}
-      <div className="flex gap-4 items-end flex-wrap">
-        <div>
-          <label className="label">Correct Answer</label>
-          <div className="flex gap-1.5">
-            {['A', 'B', 'C', 'D'].map(letter => (
-              <label key={letter}
-                className={`flex items-center justify-center w-9 h-9 rounded-lg border-2 cursor-pointer font-semibold text-sm transition-colors
-                  ${answer === letter ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
-                <input type="radio" name={`editAnswer_${q._lid}`} value={letter}
-                  checked={answer === letter} onChange={() => setAnswer(letter)} className="sr-only" />
-                {letter}
-              </label>
+
+      {type === 'mcq' && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {['A', 'B', 'C', 'D'].map((letter, i) => (
+              <div key={letter}>
+                <label className="label text-xs">Option {letter}{i < 2 && <span className="text-red-400"> *</span>}</label>
+                <input className={`input ${errors.opts && i < 2 ? 'border-red-400' : ''}`}
+                  value={opts[i]}
+                  onChange={e => { const n = [...opts]; n[i] = e.target.value; setOpts(n); }} />
+              </div>
             ))}
           </div>
+          {errors.opts && <p className="text-xs text-red-500">{errors.opts}</p>}
+          <div className="flex gap-4 items-end flex-wrap">
+            <div>
+              <label className="label">Correct Answer</label>
+              <div className="flex gap-1.5">
+                {['A', 'B', 'C', 'D'].map(letter => (
+                  <label key={letter}
+                    className={`flex items-center justify-center w-9 h-9 rounded-lg border-2 cursor-pointer font-semibold text-sm transition-colors
+                      ${answer === letter ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                    <input type="radio" name={`editAnswer_${q._lid}`} value={letter}
+                      checked={answer === letter} onChange={() => setAnswer(letter)} className="sr-only" />
+                    {letter}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="flex-1 min-w-[120px]">
+              <label className="label">Difficulty</label>
+              <select className="input" value={diff} onChange={e => setDiff(e.target.value)}>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+          </div>
+        </>
+      )}
+
+      {type === 'short_answer' && (
+        <div className="space-y-3">
+          <div>
+            <label className="label">Model Answer <span className="text-xs text-slate-400">(optional — not shown to students)</span></label>
+            <textarea className="input resize-none" rows={2}
+              value={answer} onChange={e => setAnswer(e.target.value)}
+              placeholder="Model answer for teacher reference only..." />
+          </div>
+          <div>
+            <label className="label">Difficulty</label>
+            <select className="input" value={diff} onChange={e => setDiff(e.target.value)}>
+              <option value="easy">Easy</option>
+              <option value="medium">Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
         </div>
-        <div className="flex-1 min-w-[120px]">
-          <label className="label">Difficulty</label>
-          <select className="input" value={diff} onChange={e => setDiff(e.target.value)}>
-            <option value="easy">Easy</option>
-            <option value="medium">Medium</option>
-            <option value="hard">Hard</option>
-          </select>
-        </div>
-      </div>
+      )}
+
       <div className="flex gap-2 pt-1">
         <button onClick={handleSave} className="btn-primary btn-sm">Save Changes</button>
         <button onClick={onCancel} className="btn-ghost btn-sm">Cancel</button>
@@ -216,6 +267,7 @@ export default function ExamBuilder() {
   const [mOpts, setMOpts]     = useState(['', '', '', '']);
   const [mAnswer, setMAnswer] = useState('A');
   const [mDiff, setMDiff]     = useState('medium');
+  const [mType, setMType]     = useState('mcq');
   const [mErrors, setMErrors] = useState({});
 
   // ── AI tab state ──────────────────────────────────────────────────────────
@@ -338,17 +390,20 @@ export default function ExamBuilder() {
   // ── Manual: add ──────────────────────────────────────────────────────────
   function handleAddManual() {
     const errs = {};
-    if (!mStem.trim())              errs.stem = 'Question text is required.';
-    if (!mOpts[0].trim() || !mOpts[1].trim()) errs.opts = 'At least options A and B are required.';
+    if (!mStem.trim()) errs.stem = 'Question text is required.';
+    if (mType === 'mcq' && (!mOpts[0].trim() || !mOpts[1].trim())) errs.opts = 'At least options A and B are required.';
     if (Object.keys(errs).length) { setMErrors(errs); return; }
     setMErrors({});
     addToExam({
       id: null, stem: mStem.trim(),
-      options: toApiOptions(mOpts), answer: mAnswer,
-      type: 'mcq', difficulty: mDiff,
+      options: mType === 'mcq' ? toApiOptions(mOpts) : [],
+      answer: mType === 'mcq' ? mAnswer : (mAnswer.trim() || null),
+      type: mType, difficulty: mDiff,
       subject, topic, _source: 'manual',
     });
-    setMStem(''); setMOpts(['', '', '', '']); setMAnswer('A'); setMDiff('medium');
+    setMStem(''); setMOpts(['', '', '', '']);
+    setMAnswer(mType === 'mcq' ? 'A' : '');
+    setMDiff('medium');
   }
 
   // ── AI: generate ─────────────────────────────────────────────────────────
@@ -699,6 +754,23 @@ export default function ExamBuilder() {
               {/* ── Manual tab ── */}
               {activeTab === 'manual' && (
                 <div className="space-y-4">
+                  {/* Question type selector */}
+                  <div className="flex gap-2">
+                    <label className={`flex-1 flex items-center justify-center py-2.5 rounded-lg border-2 cursor-pointer text-sm font-medium transition-colors
+                      ${mType === 'mcq' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                      <input type="radio" className="sr-only" checked={mType === 'mcq'}
+                        onChange={() => { setMType('mcq'); setMAnswer('A'); }} />
+                      Multiple Choice
+                    </label>
+                    <label
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg border-2 text-sm font-medium transition-colors cursor-pointer
+                        ${!isPro ? 'opacity-80' : ''}
+                        ${mType === 'short_answer' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                      onClick={() => { if (!isPro) { navigate('/billing'); return; } setMType('short_answer'); setMAnswer(''); }}>
+                      Short Answer <ProBadge />
+                    </label>
+                  </div>
+
                   <div>
                     <label className="label">Question text</label>
                     <textarea
@@ -708,51 +780,74 @@ export default function ExamBuilder() {
                     {mErrors.stem && <p className="text-xs text-red-500 mt-1">{mErrors.stem}</p>}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {LETTERS.map((letter, i) => (
-                      <div key={letter}>
-                        <label className="label text-xs">
-                          Option {letter} {i < 2 && <span className="text-red-400">*</span>}
-                        </label>
-                        <input
-                          className={`input ${mErrors.opts && i < 2 ? 'border-red-400' : ''}`}
-                          value={mOpts[i]}
-                          onChange={e => {
-                            const n = [...mOpts]; n[i] = e.target.value; setMOpts(n);
-                          }}
-                          placeholder={`Option ${letter}`} />
-                      </div>
-                    ))}
-                  </div>
-                  {mErrors.opts && <p className="text-xs text-red-500 -mt-2">{mErrors.opts}</p>}
-
-                  <div className="flex gap-4 items-end flex-wrap">
-                    <div>
-                      <label className="label">Correct Answer</label>
-                      <div className="flex gap-2">
-                        {LETTERS.map(letter => (
-                          <label key={letter}
-                            className={`flex items-center justify-center w-10 h-10 rounded-lg border-2 cursor-pointer font-semibold text-sm transition-colors
-                              ${mAnswer === letter
-                                ? 'border-primary-500 bg-primary-50 text-primary-700'
-                                : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
-                            <input type="radio" name="mAnswer" value={letter}
-                              checked={mAnswer === letter} onChange={() => setMAnswer(letter)}
-                              className="sr-only" />
-                            {letter}
-                          </label>
+                  {mType === 'mcq' && (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {LETTERS.map((letter, i) => (
+                          <div key={letter}>
+                            <label className="label text-xs">
+                              Option {letter} {i < 2 && <span className="text-red-400">*</span>}
+                            </label>
+                            <input
+                              className={`input ${mErrors.opts && i < 2 ? 'border-red-400' : ''}`}
+                              value={mOpts[i]}
+                              onChange={e => {
+                                const n = [...mOpts]; n[i] = e.target.value; setMOpts(n);
+                              }}
+                              placeholder={`Option ${letter}`} />
+                          </div>
                         ))}
                       </div>
+                      {mErrors.opts && <p className="text-xs text-red-500 -mt-2">{mErrors.opts}</p>}
+
+                      <div className="flex gap-4 items-end flex-wrap">
+                        <div>
+                          <label className="label">Correct Answer</label>
+                          <div className="flex gap-2">
+                            {LETTERS.map(letter => (
+                              <label key={letter}
+                                className={`flex items-center justify-center w-10 h-10 rounded-lg border-2 cursor-pointer font-semibold text-sm transition-colors
+                                  ${mAnswer === letter
+                                    ? 'border-primary-500 bg-primary-50 text-primary-700'
+                                    : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
+                                <input type="radio" name="mAnswer" value={letter}
+                                  checked={mAnswer === letter} onChange={() => setMAnswer(letter)}
+                                  className="sr-only" />
+                                {letter}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-[120px]">
+                          <label className="label">Difficulty</label>
+                          <select className="input" value={mDiff} onChange={e => setMDiff(e.target.value)}>
+                            <option value="easy">Easy</option>
+                            <option value="medium">Medium</option>
+                            <option value="hard">Hard</option>
+                          </select>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {mType === 'short_answer' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="label">Model Answer <span className="text-xs text-slate-400">(optional — not shown to students)</span></label>
+                        <textarea className="input resize-none" rows={2}
+                          value={mAnswer} onChange={e => setMAnswer(e.target.value)}
+                          placeholder="Model answer for teacher reference only..." />
+                      </div>
+                      <div>
+                        <label className="label">Difficulty</label>
+                        <select className="input" value={mDiff} onChange={e => setMDiff(e.target.value)}>
+                          <option value="easy">Easy</option>
+                          <option value="medium">Medium</option>
+                          <option value="hard">Hard</option>
+                        </select>
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-[120px]">
-                      <label className="label">Difficulty</label>
-                      <select className="input" value={mDiff} onChange={e => setMDiff(e.target.value)}>
-                        <option value="easy">Easy</option>
-                        <option value="medium">Medium</option>
-                        <option value="hard">Hard</option>
-                      </select>
-                    </div>
-                  </div>
+                  )}
 
                   <button onClick={handleAddManual} className="btn-primary w-full">
                     <PlusIcon className="w-4 h-4 mr-1.5" /> Add to Exam

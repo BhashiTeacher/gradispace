@@ -43,6 +43,7 @@ router.get('/exam/:token', async (req, res, next) => {
         id: exam.id, title: exam.title, subject: exam.subject,
         gradeLevel: exam.grade_level, duration: exam.duration,
         examType: exam.exam_type, description: exam.description,
+        resultView: exam.result_view || 'summary',
       },
       questions,
       teacher: { name: exam.teacher_name },

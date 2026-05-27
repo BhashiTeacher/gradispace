@@ -501,6 +501,54 @@ export default function ExamPage() {
             </div>
           )}
 
+          {/* Per-question review (detailed view) */}
+          {exam?.resultView === 'detailed' && result.answers && questions.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <p className="text-sm font-semibold text-slate-700 mb-3">Question Review</p>
+              <div className="space-y-3">
+                {questions.map((q, i) => {
+                  const detail = result.answers[q.id];
+                  if (!detail) return null;
+                  const isShort = q.type === 'short_answer';
+                  const givenOpt   = q.options?.find(o => o.letter === detail.given);
+                  const correctOpt = q.options?.find(o => o.letter === detail.correct);
+                  return (
+                    <div key={q.id} className={`rounded-xl border p-3 space-y-2
+                      ${isShort ? 'border-slate-200' : detail.isCorrect ? 'border-green-200 bg-green-50/40' : 'border-red-200 bg-red-50/40'}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="text-xs font-bold text-slate-400 shrink-0 mt-0.5">Q{i + 1}</span>
+                        <p className="text-sm text-slate-800 leading-snug flex-1">{q.stem}</p>
+                        {!isShort && (
+                          detail.isCorrect
+                            ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                            : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-xs">✗</span>
+                        )}
+                      </div>
+                      {!isShort && (
+                        <div className="flex flex-wrap gap-2 pl-5 text-xs">
+                          <span className={`px-2 py-0.5 rounded-full font-medium
+                            ${detail.isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            Your answer: {givenOpt?.text || detail.given || '—'}
+                          </span>
+                          {!detail.isCorrect && detail.correct && (
+                            <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                              Correct: {correctOpt?.text || detail.correct}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {isShort && detail.given && (
+                        <p className="text-xs text-slate-600 bg-slate-100 rounded-lg px-2.5 py-1.5 pl-5 ml-5">
+                          {detail.given}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Footer message */}
           {branding?.footerMessage && (
             <div className="bg-white rounded-2xl border border-slate-200 px-5 py-4 text-sm text-slate-600 text-center leading-relaxed">

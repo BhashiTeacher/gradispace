@@ -102,12 +102,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 // PUT /api/v1/exams/:id
 router.put('/:id', requireAuth, async (req, res, next) => {
   try {
-    const allowed = ['title','subject','topic','grade_level','duration','description','exam_type'];
+    const allowed = ['title','subject','topic','grade_level','duration','description','exam_type','result_view'];
     const sets = [];
     const vals = [];
     let i = 1;
     for (const [k, v] of Object.entries(req.body)) {
-      const col = k === 'gradeLevel' ? 'grade_level' : k === 'examType' ? 'exam_type' : k;
+      const col = k === 'gradeLevel' ? 'grade_level' : k === 'examType' ? 'exam_type' : k === 'resultView' ? 'result_view' : k;
       if (allowed.includes(col)) { sets.push(`${col}=$${i++}`); vals.push(v); }
     }
     if (!sets.length) return res.status(400).json({ error: 'validation_error', message: 'No valid fields to update.' });

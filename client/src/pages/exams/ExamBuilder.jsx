@@ -242,6 +242,7 @@ export default function ExamBuilder() {
   const [duration, setDuration]       = useState(45);
   const [description, setDescription] = useState('');
   const [examType, setExamType]       = useState('open');
+  const [resultView, setResultView]   = useState('summary');
 
   // Exam meta
   const [examId, setExamId]           = useState(routeId || null);
@@ -310,6 +311,7 @@ export default function ExamBuilder() {
         setDuration(exam.duration || 45);
         setDescription(exam.description || '');
         setExamType(exam.exam_type || 'open');
+        setResultView(exam.result_view || 'summary');
         setIsPublished(!!exam.published);
         setExamId(exam.id);
         if (exam.published && exam.access_token) {
@@ -512,7 +514,7 @@ export default function ExamBuilder() {
         const { exam } = await api.post('/exams', {
           title, subject, topic, gradeLevel,
           duration: parseInt(duration) || 45,
-          description, examType,
+          description, examType, resultView,
         });
         currentId = exam.id;
         setExamId(exam.id);
@@ -522,7 +524,7 @@ export default function ExamBuilder() {
         await api.put(`/exams/${currentId}`, {
           title, subject, topic, gradeLevel,
           duration: parseInt(duration) || 45,
-          description, examType,
+          description, examType, resultView,
         });
       }
 
@@ -713,6 +715,37 @@ export default function ExamBuilder() {
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-semibold text-slate-800">{opt.label}</span>
                       {opt.val === 'closed' && <ProBadge />}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">{opt.desc}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Result view */}
+          <div className="sm:col-span-2 lg:col-span-3">
+            <label className="label">Student Result View</label>
+            <div className="flex gap-3 mt-1">
+              {[
+                { val: 'summary',  label: 'Summary only',         desc: 'Students see their score, grade, and time.' },
+                { val: 'detailed', label: 'Detailed with answers', desc: 'Students see each question with correct/incorrect indicators.' },
+              ].map(opt => (
+                <label key={opt.val}
+                  className={`flex-1 flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors
+                    ${resultView === opt.val ? 'border-primary-500 bg-primary-50' : 'border-slate-200 hover:border-slate-300'}
+                    ${opt.val === 'detailed' && !isPro ? 'opacity-70' : ''}`}>
+                  <input type="radio" name="resultView" value={opt.val}
+                    checked={resultView === opt.val}
+                    onChange={() => {
+                      if (opt.val === 'detailed' && !isPro) { navigate('/billing'); return; }
+                      setResultView(opt.val);
+                    }}
+                    className="mt-0.5 text-primary-600" />
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-semibold text-slate-800">{opt.label}</span>
+                      {opt.val === 'detailed' && <ProBadge />}
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">{opt.desc}</p>
                   </div>

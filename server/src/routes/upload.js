@@ -12,8 +12,17 @@ cloudinary.config({
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB max
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
+
+// Per-type Cloudinary transformations applied server-side
+const IMAGE_TRANSFORMS = {
+  question: [{ width: 800,  crop: 'limit', quality: 'auto' }],
+  option:   [{ width: 400,  height: 400,  crop: 'fill',  quality: 'auto' }],
+  stimulus: [{ width: 1200, crop: 'limit', quality: 'auto' }],
+  banner:   [{ width: 1920, height: 400,  crop: 'fill',  quality: 'auto' }],
+  avatar:   [{ width: 200,  height: 200,  crop: 'fill',  quality: 'auto' }],
+};
 
 function uploadToCloudinary(buffer, options) {
   return new Promise((resolve, reject) => {
@@ -24,7 +33,7 @@ function uploadToCloudinary(buffer, options) {
   });
 }
 
-// POST /api/v1/upload/image
+// POST /api/v1/upload/image?type=question|option|stimulus|banner|avatar
 router.post('/image', requireAuth, requirePlan('pro', 'school'), upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No file uploaded.' });
@@ -35,9 +44,12 @@ router.post('/image', requireAuth, requirePlan('pro', 'school'), upload.single('
     if (req.file.size > 5 * 1024 * 1024) {
       return res.status(400).json({ error: 'validation_error', message: 'Image must be under 5 MB.' });
     }
+    const type = req.query.type || 'question';
+    const transformation = IMAGE_TRANSFORMS[type] || IMAGE_TRANSFORMS.question;
     const result = await uploadToCloudinary(req.file.buffer, {
       folder: `gradispace/${req.teacherId}`,
       resource_type: 'image',
+      transformation,
     });
     res.status(201).json({ url: result.secure_url });
   } catch (err) { next(err); }
@@ -47,9 +59,9 @@ router.post('/image', requireAuth, requirePlan('pro', 'school'), upload.single('
 router.post('/audio', requireAuth, requirePlan('pro', 'school'), upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No file uploaded.' });
-    const allowed = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-m4a', 'audio/mp4'];
-    if (!allowed.includes(req.file.mimetype) && !req.file.originalname.match(/\.(mp3|wav|m4a)$/i)) {
-      return res.status(400).json({ error: 'validation_error', message: 'Only MP3, WAV, M4A allowed.' });
+    const allowed = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-m4a', 'audio/mp4', 'audio/ogg'];
+    if (!allowed.includes(req.file.mimetype) && !req.file.originalname.match(/\.(mp3|wav|m4a|ogg)$/i)) {
+      return res.status(400).json({ error: 'validation_error', message: 'Only MP3, WAV, M4A, OGG allowed.' });
     }
     const result = await uploadToCloudinary(req.file.buffer, {
       folder: `gradispace/${req.teacherId}`,

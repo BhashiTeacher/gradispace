@@ -337,7 +337,7 @@ export default function Settings() {
             <ImageUploadField
               label="Banner Image"
               value={form.bannerImage}
-              endpoint="/upload/banner"
+              endpoint="/upload/image?type=banner"
               accept="image/jpeg,image/png,image/webp"
               hint="Recommended: 1400 × 300 px. Max 5 MB."
               isPro={isPro}
@@ -350,7 +350,7 @@ export default function Settings() {
                 <ImageUploadField
                   label="Profile Photo"
                   value={form.profilePhoto}
-                  endpoint="/upload/avatar"
+                  endpoint="/upload/image?type=avatar"
                   accept="image/jpeg,image/png,image/webp"
                   hint="Square image. 200 × 200 px cropped."
                   isPro={isPro}

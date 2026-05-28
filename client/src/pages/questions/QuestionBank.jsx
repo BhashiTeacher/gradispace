@@ -7,6 +7,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { api } from '../../api';
 import Spinner from '../../components/UI/Spinner';
+import { ImageUploadButton, AudioUploadButton } from '../../components/UI/FileUploadButton';
 
 const LIMIT = 20;
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -17,6 +18,7 @@ const emptyForm = {
   answer: 'A', modelAnswer: '',
   subject: '', topic: '', gradeLevel: '',
   difficulty: 'medium', tags: '',
+  imageUrl: '', audioUrl: '',
 };
 
 function TypeBadge({ type }) {
@@ -32,6 +34,7 @@ function DiffBadge({ value }) {
 
 // ── Add / Edit modal ──────────────────────────────────────────────────────────
 function QuestionModal({ mode, initial, onSave, onClose, saving }) {
+  const { isPro } = useAuth();
   const [form, setForm]     = useState(initial || emptyForm);
   const [errors, setErrors] = useState({});
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -53,6 +56,8 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
       topic:      form.topic.trim()   || null,    gradeLevel: form.gradeLevel.trim() || null,
       tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       inBank: true,
+      imageUrl: form.imageUrl || null,
+      audioUrl: form.audioUrl || null,
     };
     if (form.type === 'mcq') {
       payload.options = toApiOptions(form.opts);
@@ -162,6 +167,37 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
             <label className="label">Tags <span className="text-slate-400 font-normal">(comma-separated)</span></label>
             <input className="input" value={form.tags} onChange={e => setF('tags', e.target.value)}
               placeholder="e.g. biology, cells, grade10" />
+          </div>
+
+          {/* Question image (Pro) */}
+          <div>
+            <label className="label flex items-center gap-1">
+              Question Image
+              {!isPro && <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">Pro</span>}
+            </label>
+            {form.imageUrl ? (
+              <ImageUploadButton
+                value={form.imageUrl}
+                onChange={url => setF('imageUrl', url)}
+                uploadType="question"
+              />
+            ) : (
+              <ImageUploadButton
+                value=""
+                onChange={url => setF('imageUrl', url)}
+                uploadType="question"
+                label="Upload Question Image"
+              />
+            )}
+          </div>
+
+          {/* Audio clip (Pro) */}
+          <div>
+            <label className="label flex items-center gap-1">
+              Audio Clip
+              {!isPro && <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">Pro</span>}
+            </label>
+            <AudioUploadButton value={form.audioUrl} onChange={url => setF('audioUrl', url)} />
           </div>
         </div>
 
@@ -345,6 +381,8 @@ export default function QuestionBank() {
         gradeLevel:  q.grade_level || '',
         difficulty:  q.difficulty  || 'medium',
         tags:        (q.tags || []).join(', '),
+        imageUrl:    q.image_url   || '',
+        audioUrl:    q.audio_url   || '',
       },
     });
   }

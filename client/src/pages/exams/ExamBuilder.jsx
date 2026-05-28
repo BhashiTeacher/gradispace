@@ -11,6 +11,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { api } from '../../api';
 import Spinner from '../../components/UI/Spinner';
 import { ProBadge } from '../../components/UI/ProGate';
+import { ImageUploadButton, AudioUploadButton } from '../../components/UI/FileUploadButton';
 
 let _lid = 0;
 const makeId = () => `q_${++_lid}_${Date.now()}`;
@@ -183,10 +184,12 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
                   value={opts[i]}
                   onChange={e => { const n = [...opts]; n[i] = e.target.value; setOpts(n); }} />
                 {isPro && (
-                  <input className="input mt-1 text-xs text-slate-500"
+                  <ImageUploadButton
                     value={optImgUrls[i]}
-                    onChange={e => { const n = [...optImgUrls]; n[i] = e.target.value; setOptImgUrls(n); }}
-                    placeholder="Image URL (optional)" />
+                    onChange={url => { const n = [...optImgUrls]; n[i] = url; setOptImgUrls(n); }}
+                    uploadType="option"
+                    className="mt-1"
+                  />
                 )}
               </div>
             ))}
@@ -244,9 +247,7 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
           <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
             Audio Clip <ProBadge />
           </label>
-          <input className="input text-sm" value={audioUrl}
-            onChange={e => setAudioUrl(e.target.value)}
-            placeholder="Audio URL (MP3, WAV, OGG…)" />
+          <AudioUploadButton value={audioUrl} onChange={setAudioUrl} />
           {audioUrl.trim() && (
             <div className="flex items-center gap-2">
               <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
@@ -290,9 +291,11 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
                 value={stimulus.text}
                 onChange={e => setStimulus(s => ({ ...s, text: e.target.value }))}
                 placeholder="Stimulus text / reading passage…" />
-              <input className="input text-sm" value={stimulus.imageUrl}
-                onChange={e => setStimulus(s => ({ ...s, imageUrl: e.target.value }))}
-                placeholder="Image URL (optional)" />
+              <ImageUploadButton
+                value={stimulus.imageUrl}
+                onChange={url => setStimulus(s => ({ ...s, imageUrl: url }))}
+                uploadType="stimulus"
+              />
             </div>
           )}
         </div>
@@ -961,10 +964,12 @@ export default function ExamBuilder() {
                               }}
                               placeholder={`Option ${letter}`} />
                             {isPro && (
-                              <input className="input mt-1 text-xs text-slate-500"
+                              <ImageUploadButton
                                 value={mOptImgUrls[i]}
-                                onChange={e => { const n = [...mOptImgUrls]; n[i] = e.target.value; setMOptImgUrls(n); }}
-                                placeholder="Image URL (optional)" />
+                                onChange={url => { const n = [...mOptImgUrls]; n[i] = url; setMOptImgUrls(n); }}
+                                uploadType="option"
+                                className="mt-1"
+                              />
                             )}
                           </div>
                         ))}
@@ -1026,9 +1031,7 @@ export default function ExamBuilder() {
                       <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
                         Audio Clip <ProBadge />
                       </label>
-                      <input className="input text-sm" value={mAudioUrl}
-                        onChange={e => setMAudioUrl(e.target.value)}
-                        placeholder="Audio URL (MP3, WAV, OGG…)" />
+                      <AudioUploadButton value={mAudioUrl} onChange={setMAudioUrl} />
                       {mAudioUrl.trim() && (
                         <div className="flex items-center gap-2">
                           <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
@@ -1072,9 +1075,11 @@ export default function ExamBuilder() {
                             value={mStimulus.text}
                             onChange={e => setMStimulus(s => ({ ...s, text: e.target.value }))}
                             placeholder="Stimulus text / reading passage…" />
-                          <input className="input text-sm" value={mStimulus.imageUrl}
-                            onChange={e => setMStimulus(s => ({ ...s, imageUrl: e.target.value }))}
-                            placeholder="Image URL (optional)" />
+                          <ImageUploadButton
+                            value={mStimulus.imageUrl}
+                            onChange={url => setMStimulus(s => ({ ...s, imageUrl: url }))}
+                            uploadType="stimulus"
+                          />
                         </div>
                       )}
                     </div>

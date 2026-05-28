@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   PlusIcon, MagnifyingGlassIcon, TrashIcon, PencilIcon,
   CircleStackIcon, XMarkIcon, ChevronDownIcon,
@@ -35,8 +36,10 @@ function DiffBadge({ value }) {
 // ── Add / Edit modal ──────────────────────────────────────────────────────────
 function QuestionModal({ mode, initial, onSave, onClose, saving }) {
   const { isPro } = useAuth();
+  const navigate  = useNavigate();
   const [form, setForm]     = useState(initial || emptyForm);
   const [errors, setErrors] = useState({});
+  const [showAudio, setShowAudio] = useState(!!(initial?.audioUrl));
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   function validate() {
@@ -191,13 +194,25 @@ function QuestionModal({ mode, initial, onSave, onClose, saving }) {
             )}
           </div>
 
-          {/* Audio clip (Pro) */}
-          <div>
-            <label className="label flex items-center gap-1">
-              Audio Clip
-              {!isPro && <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full">Pro</span>}
-            </label>
-            <AudioUploadButton value={form.audioUrl} onChange={url => setF('audioUrl', url)} />
+          {/* Audio clip (Pro) — collapsible */}
+          <div className="space-y-1.5">
+            {showAudio ? (
+              <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-600">Audio Clip</span>
+                  <button type="button" onClick={() => { setF('audioUrl', ''); setShowAudio(false); }}
+                    className="text-xs text-red-400 hover:text-red-500">Remove</button>
+                </div>
+                <AudioUploadButton value={form.audioUrl} onChange={url => setF('audioUrl', url)} />
+              </div>
+            ) : (
+              <button type="button"
+                onClick={() => { if (!isPro) { navigate('/billing'); return; } setShowAudio(true); }}
+                className="text-xs text-slate-400 hover:text-primary-600 transition-colors flex items-center gap-1">
+                + Add audio clip
+                {!isPro && <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 px-1 py-0.5 rounded-full ml-0.5">Pro</span>}
+              </button>
+            )}
           </div>
         </div>
 

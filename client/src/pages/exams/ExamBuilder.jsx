@@ -113,6 +113,9 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
   const [diff, setDiff]               = useState(q.difficulty || 'medium');
   const [audioUrl, setAudioUrl]       = useState(q.audioUrl || q.audio_url || '');
   const [audioLimit, setAudioLimit]   = useState(q.audioPlayLimit ?? q.audio_play_limit ?? 3);
+  const [videoUrl, setVideoUrl]       = useState(q.videoUrl || q.video_url || '');
+  const [showAudio, setShowAudio]     = useState(!!(q.audioUrl || q.audio_url));
+  const [showVideo, setShowVideo]     = useState(!!(q.videoUrl || q.video_url));
   const [stimulus, setStimulus]       = useState(q.stimulus || null);
   const [errors, setErrors]           = useState({});
 
@@ -130,6 +133,7 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
       difficulty:     diff,
       audioUrl:       isPro ? (audioUrl.trim() || null) : (q.audioUrl || q.audio_url || null),
       audioPlayLimit: isPro && audioUrl.trim() ? (parseInt(audioLimit) || null) : null,
+      videoUrl:       isPro ? (videoUrl.trim() || null) : (q.videoUrl || q.video_url || null),
       stimulus:       isPro && stimulus && (stimulus.text?.trim() || stimulus.imageUrl?.trim()) ? stimulus : null,
     });
   }
@@ -241,28 +245,59 @@ function QuestionEditForm({ q, index, total, onMoveUp, onMoveDown, onSave, onCan
         </div>
       )}
 
-      {/* Audio (Pro only) */}
-      {isPro && (
-        <div className="border border-slate-200 rounded-lg p-3 space-y-2">
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-            Audio Clip <ProBadge />
-          </label>
-          <AudioUploadButton value={audioUrl} onChange={setAudioUrl} />
-          {audioUrl.trim() && (
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
-              <select className="input w-32 text-sm"
-                value={audioLimit}
-                onChange={e => setAudioLimit(e.target.value)}>
-                {[1, 2, 3, 5, 10].map(n => (
-                  <option key={n} value={n}>{n} time{n > 1 ? 's' : ''}</option>
-                ))}
-                <option value="">Unlimited</option>
-              </select>
+      {/* Audio + Video — collapsible */}
+      <div className="space-y-2">
+        {showAudio && (
+          <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">Audio Clip <ProBadge /></span>
+              <button type="button" onClick={() => { setAudioUrl(''); setShowAudio(false); }}
+                className="text-xs text-red-400 hover:text-red-500">Remove</button>
             </div>
-          )}
-        </div>
-      )}
+            <AudioUploadButton value={audioUrl} onChange={setAudioUrl} />
+            {audioUrl && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
+                <select className="input w-32 text-sm" value={audioLimit}
+                  onChange={e => setAudioLimit(e.target.value)}>
+                  {[1,2,3,5,10].map(n => <option key={n} value={n}>{n} time{n>1?'s':''}</option>)}
+                  <option value="">Unlimited</option>
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+        {showVideo && (
+          <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">YouTube Video <ProBadge /></span>
+              <button type="button" onClick={() => { setVideoUrl(''); setShowVideo(false); }}
+                className="text-xs text-red-400 hover:text-red-500">Remove</button>
+            </div>
+            <input className="input text-sm" value={videoUrl}
+              onChange={e => setVideoUrl(e.target.value)}
+              placeholder="https://youtube.com/watch?v=…" />
+          </div>
+        )}
+        {(!showAudio || !showVideo) && (
+          <div className="flex gap-3 pt-0.5">
+            {!showAudio && (
+              <button type="button"
+                onClick={() => { if (!isPro) { navigate('/billing'); return; } setShowAudio(true); }}
+                className="text-xs text-slate-400 hover:text-primary-600 transition-colors flex items-center gap-1">
+                + Add audio clip {!isPro && <ProBadge />}
+              </button>
+            )}
+            {!showVideo && (
+              <button type="button"
+                onClick={() => { if (!isPro) { navigate('/billing'); return; } setShowVideo(true); }}
+                className="text-xs text-slate-400 hover:text-primary-600 transition-colors flex items-center gap-1">
+                + Add YouTube video {!isPro && <ProBadge />}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Stimulus / reading passage (Pro only) */}
       {isPro && (
@@ -355,6 +390,9 @@ export default function ExamBuilder() {
   const [mType, setMType]             = useState('mcq');
   const [mAudioUrl, setMAudioUrl]     = useState('');
   const [mAudioLimit, setMAudioLimit] = useState(3);
+  const [mVideoUrl, setMVideoUrl]     = useState('');
+  const [mAudioOpen, setMAudioOpen]   = useState(false);
+  const [mVideoOpen, setMVideoOpen]   = useState(false);
   const [mStimulus, setMStimulus]     = useState(null);
   const [mErrors, setMErrors]         = useState({});
 
@@ -420,6 +458,7 @@ export default function ExamBuilder() {
           topic:          q.topic,
           audioUrl:       q.audio_url || null,
           audioPlayLimit: q.audio_play_limit ?? null,
+          videoUrl:       q.video_url || null,
           stimulus:       q.stimulus || null,
           passage:        q.passage  || null,
           _lid:           makeId(),
@@ -498,12 +537,14 @@ export default function ExamBuilder() {
       type: mType, difficulty: mDiff,
       audioUrl: isPro ? (mAudioUrl.trim() || null) : null,
       audioPlayLimit: isPro && mAudioUrl.trim() ? (parseInt(mAudioLimit) || null) : null,
+      videoUrl: isPro ? (mVideoUrl.trim() || null) : null,
       stimulus: isPro && mStimulus && (mStimulus.text?.trim() || mStimulus.imageUrl?.trim()) ? mStimulus : null,
       subject, topic, _source: 'manual',
     });
     setMStem(''); setMOpts(['', '', '', '']); setMOptImgUrls(['', '', '', '']);
     setMAnswer(mType === 'mcq' ? 'A' : ''); setMDiff('medium');
-    setMAudioUrl(''); setMAudioLimit(3); setMStimulus(null);
+    setMAudioUrl(''); setMAudioLimit(3); setMVideoUrl('');
+    setMAudioOpen(false); setMVideoOpen(false); setMStimulus(null);
   }
 
   // ── AI: generate ─────────────────────────────────────────────────────────
@@ -630,6 +671,7 @@ export default function ExamBuilder() {
       subject: q.subject, topic: q.topic,
       audioUrl: q.audio_url || q.audioUrl || null,
       audioPlayLimit: null,
+      videoUrl: q.video_url || q.videoUrl || null,
       _source: 'bank',
     });
   }
@@ -731,6 +773,7 @@ export default function ExamBuilder() {
           type:           updated.type,
           audioUrl:       updated.audioUrl       || null,
           audioPlayLimit: updated.audioPlayLimit ?? null,
+          videoUrl:       updated.videoUrl       || null,
         });
         setJustSavedId(updated.id);
         setTimeout(() => setJustSavedId(null), 2000);
@@ -1025,28 +1068,59 @@ export default function ExamBuilder() {
                     </div>
                   )}
 
-                  {/* Audio clip (Pro only) */}
-                  {isPro && (
-                    <div className="border border-slate-200 rounded-lg p-3 space-y-2">
-                      <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                        Audio Clip <ProBadge />
-                      </label>
-                      <AudioUploadButton value={mAudioUrl} onChange={setMAudioUrl} />
-                      {mAudioUrl.trim() && (
-                        <div className="flex items-center gap-2">
-                          <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
-                          <select className="input w-32 text-sm"
-                            value={mAudioLimit}
-                            onChange={e => setMAudioLimit(e.target.value)}>
-                            {[1, 2, 3, 5, 10].map(n => (
-                              <option key={n} value={n}>{n} time{n > 1 ? 's' : ''}</option>
-                            ))}
-                            <option value="">Unlimited</option>
-                          </select>
+                  {/* Audio + Video — collapsible */}
+                  <div className="space-y-2">
+                    {mAudioOpen && (
+                      <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">Audio Clip <ProBadge /></span>
+                          <button type="button" onClick={() => { setMAudioUrl(''); setMAudioOpen(false); }}
+                            className="text-xs text-red-400 hover:text-red-500">Remove</button>
                         </div>
-                      )}
-                    </div>
-                  )}
+                        <AudioUploadButton value={mAudioUrl} onChange={setMAudioUrl} />
+                        {mAudioUrl && (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label className="text-xs text-slate-500 shrink-0">Max plays per student</label>
+                            <select className="input w-32 text-sm" value={mAudioLimit}
+                              onChange={e => setMAudioLimit(e.target.value)}>
+                              {[1,2,3,5,10].map(n => <option key={n} value={n}>{n} time{n>1?'s':''}</option>)}
+                              <option value="">Unlimited</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {mVideoOpen && (
+                      <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">YouTube Video <ProBadge /></span>
+                          <button type="button" onClick={() => { setMVideoUrl(''); setMVideoOpen(false); }}
+                            className="text-xs text-red-400 hover:text-red-500">Remove</button>
+                        </div>
+                        <input className="input text-sm" value={mVideoUrl}
+                          onChange={e => setMVideoUrl(e.target.value)}
+                          placeholder="https://youtube.com/watch?v=…" />
+                      </div>
+                    )}
+                    {(!mAudioOpen || !mVideoOpen) && (
+                      <div className="flex gap-3 pt-0.5">
+                        {!mAudioOpen && (
+                          <button type="button"
+                            onClick={() => { if (!isPro) { navigate('/billing'); return; } setMAudioOpen(true); }}
+                            className="text-xs text-slate-400 hover:text-primary-600 transition-colors flex items-center gap-1">
+                            + Add audio clip {!isPro && <ProBadge />}
+                          </button>
+                        )}
+                        {!mVideoOpen && (
+                          <button type="button"
+                            onClick={() => { if (!isPro) { navigate('/billing'); return; } setMVideoOpen(true); }}
+                            className="text-xs text-slate-400 hover:text-primary-600 transition-colors flex items-center gap-1">
+                            + Add YouTube video {!isPro && <ProBadge />}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   {/* Stimulus / reading passage (Pro only) */}
                   {isPro && (

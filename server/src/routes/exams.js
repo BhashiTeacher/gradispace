@@ -210,21 +210,22 @@ router.put('/:id/questions', requireAuth, async (req, res, next) => {
 // PUT /api/v1/exams/:examId/questions/:questionId  — update exam snapshot only (no questions table touch)
 router.put('/:examId/questions/:questionId', requireAuth, async (req, res, next) => {
   try {
-    const { stem, options, answer, type, audioUrl, audioPlayLimit } = req.body;
+    const { stem, options, answer, type, audioUrl, audioPlayLimit, videoUrl } = req.body;
     const { rowCount } = await db.query(
       'SELECT 1 FROM exams WHERE id=$1 AND teacher_id=$2', [req.params.examId, req.teacherId]
     );
     if (!rowCount) return res.status(404).json({ error: 'not_found' });
     await db.query(`
       UPDATE exam_questions SET
-        stem=$1, options=$2, answer=$3, type=$4, audio_url=$5, audio_play_limit=$6
-      WHERE exam_id=$7 AND question_id=$8`,
+        stem=$1, options=$2, answer=$3, type=$4, audio_url=$5, audio_play_limit=$6, video_url=$7
+      WHERE exam_id=$8 AND question_id=$9`,
       [stem || null,
        options != null ? JSON.stringify(options) : null,
        answer || null,
        type || null,
        audioUrl || null,
        audioPlayLimit != null ? parseInt(audioPlayLimit) : null,
+       videoUrl || null,
        req.params.examId, req.params.questionId]
     );
     res.json({ ok: true });

@@ -4,7 +4,7 @@ import {
   DocumentTextIcon, CircleStackIcon, UsersIcon, SparklesIcon,
   PencilSquareIcon, ChartBarIcon, RocketLaunchIcon, EyeIcon,
   ArrowRightIcon, CheckCircleIcon, ClockIcon, LockClosedIcon,
-  ShareIcon, XMarkIcon, ClipboardDocumentIcon, CheckIcon,
+  ShareIcon, XMarkIcon, ClipboardDocumentIcon, CheckIcon, PrinterIcon,
 } from '@heroicons/react/24/outline';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -93,7 +93,7 @@ function Skeleton({ className = '' }) {
 
 // ─── Recent exam row ─────────────────────────────────────────────────────────
 
-function ExamRow({ exam, onUnpublish, onPublish, onShare }) {
+function ExamRow({ exam, onUnpublish, onPublish, onShare, onPrint }) {
   const navigate = useNavigate();
   const [unpublishing, setUnpublishing] = useState(false);
   const [publishing, setPublishing]     = useState(false);
@@ -173,6 +173,13 @@ function ExamRow({ exam, onUnpublish, onPublish, onShare }) {
           title="View results"
         >
           <ChartBarIcon className="w-4 h-4" />
+        </button>
+        <button
+          onClick={e => { e.stopPropagation(); onPrint(exam); }}
+          className="btn-ghost btn-sm hidden sm:inline-flex"
+          title="Print exam paper PDF"
+        >
+          <PrinterIcon className="w-4 h-4" />
         </button>
         {exam.published ? (
           <>
@@ -373,6 +380,15 @@ export default function Dashboard() {
     setShareModal({ link, title: exam.title });
   }
 
+  async function handlePrint(exam) {
+    if (!isPro) { navigate('/billing'); return; }
+    try {
+      await api.download(`/exams/${exam.id}/print-pdf`, `${exam.title || 'exam'}_paper.pdf`);
+    } catch (err) {
+      toast(err.message || 'PDF generation failed.', 'error');
+    }
+  }
+
   // Stat card data
   const examLimit = isPro ? '∞' : '3';
   const bankLimit = isPro ? '∞' : '50';
@@ -479,6 +495,7 @@ export default function Dashboard() {
                     onUnpublish={handleUnpublish}
                     onPublish={handlePublish}
                     onShare={handleShare}
+                    onPrint={handlePrint}
                   />
                 ))
               )}

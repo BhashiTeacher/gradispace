@@ -4,6 +4,7 @@ import {
   PlusIcon, TrashIcon, ArrowUpIcon, ArrowDownIcon,
   SparklesIcon, DocumentArrowUpIcon, CircleStackIcon,
   PencilSquareIcon, CheckIcon, XMarkIcon, ClipboardDocumentIcon,
+  PrinterIcon,
 } from '@heroicons/react/24/outline';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -374,6 +375,7 @@ export default function ExamBuilder() {
   // Tab & save
   const [activeTab, setActiveTab]     = useState('manual');
   const [saving, setSaving]           = useState(false);
+  const [printingPdf, setPrintingPdf] = useState(false);
   const [editingIdx, setEditingIdx]   = useState(null);
   const [justSavedId, setJustSavedId] = useState(null);
 
@@ -674,6 +676,20 @@ export default function ExamBuilder() {
       videoUrl: q.video_url || q.videoUrl || null,
       _source: 'bank',
     });
+  }
+
+  // ── Print PDF ─────────────────────────────────────────────────────────────
+  async function handlePrintPdf() {
+    if (!isPro) { navigate('/billing'); return; }
+    if (!examId) { toast('Save the exam first before printing.', 'warning'); return; }
+    setPrintingPdf(true);
+    try {
+      await api.download(`/exams/${examId}/print-pdf`, `${title || 'exam'}_paper.pdf`);
+    } catch (err) {
+      toast(err.message || 'PDF generation failed.', 'error');
+    } finally {
+      setPrintingPdf(false);
+    }
   }
 
   // ── Save ─────────────────────────────────────────────────────────────────
@@ -1527,6 +1543,15 @@ export default function ExamBuilder() {
               <button onClick={() => setPublishModal(m => ({ ...m, open: true }))}
                 className="btn-ghost btn-sm text-primary-600 hidden sm:inline-flex">
                 <ClipboardDocumentIcon className="w-4 h-4 mr-1" /> Share Link
+              </button>
+            )}
+            {examId && (
+              <button onClick={handlePrintPdf} disabled={printingPdf}
+                className="btn-ghost btn-sm hidden sm:inline-flex">
+                {printingPdf
+                  ? <Spinner className="w-4 h-4 mr-1" />
+                  : <PrinterIcon className="w-4 h-4 mr-1" />}
+                Print PDF {!isPro && <ProBadge />}
               </button>
             )}
             {isPublished && (

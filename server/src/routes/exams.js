@@ -1,7 +1,8 @@
-const router = require('express').Router();
-const db     = require('../db');
-const { requireAuth }    = require('../middleware/auth');
-const { checkExamLimit } = require('../middleware/plan');
+const router      = require('express').Router();
+const PDFDocument = require('pdfkit');
+const db          = require('../db');
+const { requireAuth }              = require('../middleware/auth');
+const { checkExamLimit, requirePlan } = require('../middleware/plan');
 
 // GET /api/v1/exams
 router.get('/', requireAuth, async (req, res, next) => {
@@ -229,6 +230,199 @@ router.put('/:examId/questions/:questionId', requireAuth, async (req, res, next)
        req.params.examId, req.params.questionId]
     );
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// GET /api/v1/exams/:id/print-pdf  — generate printable exam paper (Pro)
+router.get('/:id/print-pdf', requireAuth, requirePlan('pro', 'school'), async (req, res, next) => {
+  try {
+    const { rows: eRows } = await db.query(`
+      SELECT e.*, t.name AS teacher_name, t.portal_title, t.brand_colour
+      FROM exams e JOIN teachers t ON t.id=e.teacher_id
+      WHERE e.id=$1 AND e.teacher_id=$2
+    `, [req.params.id, req.teacherId]);
+    if (!eRows[0]) return res.status(404).json({ error: 'not_found' });
+    const exam = eRows[0];
+
+    const { rows: qRows } = await db.query(`
+      SELECT COALESCE(eq.type, q.type) AS type,
+             COALESCE(eq.stem, q.stem) AS stem,
+             COALESCE(eq.options, q.options) AS options,
+             COALESCE(eq.passage, q.passage) AS passage,
+             COALESCE(eq.stimulus, q.stimulus) AS stimulus,
+             eq.part, eq.part_instruction
+      FROM exam_questions eq
+      JOIN questions q ON q.id=eq.question_id
+      WHERE eq.exam_id=$1 ORDER BY eq.order_num
+    `, [exam.id]);
+
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 50, bottom: 60, left: 50, right: 50 },
+      bufferPages: true,
+    });
+
+    const safeName = (exam.title || 'exam').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 50);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_paper.pdf"`);
+    doc.pipe(res);
+
+    const W = doc.page.width - 100;  // content width
+    const L = 50;                    // left margin
+    const brand = /^#[0-9a-f]{3,6}$/i.test(exam.brand_colour || '') ? exam.brand_colour : '#003865';
+    const PAGE_H = doc.page.height;
+    const SAFE_BOTTOM = PAGE_H - 65;
+
+    function needPage(est = 80) {
+      if (doc.y + est > SAFE_BOTTOM) doc.addPage();
+    }
+
+    // ─── Header ──────────────────────────────────────────────────────────────
+    doc.rect(L, 38, W, 3).fill(brand);
+    doc.y = 49;
+
+    const school = (exam.portal_title || exam.teacher_name || '').trim();
+    if (school) {
+      doc.font('Helvetica').fontSize(8).fillColor('#888888')
+         .text(school.toUpperCase(), L, doc.y, { width: W, align: 'center' });
+      doc.y += 4;
+    }
+
+    doc.font('Helvetica-Bold').fontSize(18).fillColor('#111111')
+       .text(exam.title, L, doc.y, { width: W, align: 'center' });
+    doc.moveDown(0.25);
+
+    const meta = [
+      exam.subject,
+      exam.grade_level ? `Grade ${exam.grade_level}` : '',
+      exam.duration    ? `${exam.duration} min`        : '',
+      `${qRows.length} question${qRows.length !== 1 ? 's' : ''}`,
+    ].filter(Boolean).join('   ·   ');
+    doc.font('Helvetica').fontSize(9).fillColor('#666666')
+       .text(meta, L, doc.y, { width: W, align: 'center' });
+    doc.moveDown(0.65);
+
+    doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+    doc.moveDown(0.55);
+
+    // ─── Student details box ──────────────────────────────────────────────────
+    const boxY = doc.y;
+    doc.moveTo(L, boxY).lineTo(L + W, boxY).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+    doc.moveTo(L, boxY + 26).lineTo(L + W, boxY + 26).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+    doc.font('Helvetica').fontSize(9).fillColor('#444444')
+       .text('Name:', L + 6, boxY + 8, { lineBreak: false, width: 32 });
+    doc.moveTo(L + 40, boxY + 22).lineTo(L + 220, boxY + 22).lineWidth(0.5).strokeColor('#AAAAAA').stroke();
+    doc.font('Helvetica').fontSize(9).fillColor('#444444')
+       .text('Class / Index:', L + 228, boxY + 8, { lineBreak: false, width: 72 });
+    doc.moveTo(L + 302, boxY + 22).lineTo(L + W, boxY + 22).lineWidth(0.5).strokeColor('#AAAAAA').stroke();
+    doc.y = boxY + 32;
+
+    if (exam.description) {
+      doc.moveDown(0.4);
+      doc.font('Helvetica-Oblique').fontSize(9).fillColor('#444444')
+         .text(`Instructions: ${exam.description}`, L, doc.y, { width: W });
+    }
+    doc.moveDown(0.75);
+    doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+    doc.moveDown(0.8);
+
+    // ─── Questions ────────────────────────────────────────────────────────────
+    let currentPart = null;
+    let qNum = 0;
+
+    for (const q of qRows) {
+      const part = q.part || 'Part 1';
+
+      // Part header
+      if (part !== currentPart) {
+        currentPart = part;
+        needPage(65);
+        if (qNum > 0) doc.moveDown(0.5);
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(brand)
+           .text(part, L, doc.y, { width: W });
+        if (q.part_instruction) {
+          doc.font('Helvetica-Oblique').fontSize(9).fillColor('#555555')
+             .text(q.part_instruction, L + 8, doc.y, { width: W - 8 });
+        }
+        doc.moveDown(0.3);
+        doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
+        doc.moveDown(0.5);
+      }
+
+      qNum++;
+      needPage(80);
+
+      // Stimulus
+      if (q.stimulus && (q.stimulus.title || q.stimulus.text)) {
+        if (q.stimulus.title) {
+          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#1E40AF')
+             .text(q.stimulus.title, L + 8, doc.y, { width: W - 8 });
+        }
+        if (q.stimulus.text) {
+          doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#374151')
+             .text(q.stimulus.text, L + 8, doc.y, { width: W - 8 });
+        }
+        doc.moveDown(0.35);
+      } else if (q.passage && (q.passage.title || q.passage.text)) {
+        if (q.passage.title) {
+          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#374151')
+             .text(q.passage.title, L + 8, doc.y, { width: W - 8 });
+        }
+        if (q.passage.text) {
+          doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#444444')
+             .text(q.passage.text, L + 8, doc.y, { width: W - 8 });
+        }
+        doc.moveDown(0.3);
+      }
+
+      // Question number + stem
+      const stemY = doc.y;
+      doc.font('Helvetica-Bold').fontSize(10).fillColor('#111111')
+         .text(`${qNum}.`, L, stemY, { width: 22, lineBreak: false });
+      doc.font('Helvetica').fontSize(10).fillColor('#111111')
+         .text(q.stem, L + 24, stemY, { width: W - 24 });
+      doc.moveDown(0.4);
+
+      // MCQ options
+      if (q.type === 'mcq' && Array.isArray(q.options)) {
+        for (const opt of q.options) {
+          if (!opt.text) continue;
+          needPage(22);
+          const oy = doc.y;
+          doc.circle(L + 32, oy + 5.5, 4).lineWidth(0.5).strokeColor('#999999').stroke();
+          doc.font('Helvetica-Bold').fontSize(9).fillColor('#666666')
+             .text(opt.letter, L + 29.5, oy + 1.5, { lineBreak: false, width: 9 });
+          doc.font('Helvetica').fontSize(9.5).fillColor('#222222')
+             .text(opt.text, L + 45, oy, { width: W - 45 });
+          doc.moveDown(0.15);
+        }
+      }
+
+      // Short answer lines
+      if (q.type === 'short_answer') {
+        for (let i = 0; i < 4; i++) {
+          needPage(24);
+          const lY = doc.y + 16;
+          doc.moveTo(L + 24, lY).lineTo(L + W, lY)
+             .lineWidth(0.5).dash(3, { space: 4 }).strokeColor('#BBBBBB').stroke().undash();
+          doc.y = lY + 6;
+        }
+      }
+
+      doc.moveDown(0.8);
+    }
+
+    // ─── Page numbers ─────────────────────────────────────────────────────────
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      const fy = PAGE_H - 42;
+      doc.moveTo(L, fy).lineTo(L + W, fy).lineWidth(0.3).strokeColor('#DDDDDD').stroke();
+      doc.font('Helvetica').fontSize(8).fillColor('#AAAAAA')
+         .text(`${exam.title}   ·   Page ${i + 1} of ${range.count}`, L, fy + 7, { width: W, align: 'center' });
+    }
+
+    doc.end();
   } catch (err) { next(err); }
 });
 

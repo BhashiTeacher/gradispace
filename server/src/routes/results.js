@@ -1,5 +1,6 @@
-const router = require('express').Router();
-const db     = require('../db');
+const router  = require('express').Router();
+const db      = require('../db');
+const ExcelJS = require('exceljs');
 const { requireAuth } = require('../middleware/auth');
 const { requirePlan } = require('../middleware/plan');
 
@@ -104,6 +105,86 @@ router.get('/student/:email', requireAuth, requirePlan('pro', 'school'), async (
       submissions: rows,
       progressChart: rows.map(r => ({ date: r.submitted_at, pct: r.pct, examTitle: r.exam_title })),
     });
+  } catch (err) { next(err); }
+});
+
+// GET /api/v1/results/export  — download XLSX or CSV (Pro)
+router.get('/export', requireAuth, requirePlan('pro', 'school'), async (req, res, next) => {
+  try {
+    const { examId, studentEmail, gradeLevel, subject, dateFrom, dateTo, format = 'xlsx' } = req.query;
+    const conditions = ['e.teacher_id=$1', 's.submitted_at IS NOT NULL'];
+    const params = [req.teacherId];
+    let i = 2;
+    if (examId)       { conditions.push(`s.exam_id=$${i++}`);        params.push(examId); }
+    if (studentEmail) { conditions.push(`s.student_email=$${i++}`);  params.push(studentEmail.toLowerCase()); }
+    if (gradeLevel)   { conditions.push(`e.grade_level=$${i++}`);    params.push(gradeLevel); }
+    if (subject)      { conditions.push(`e.subject=$${i++}`);        params.push(subject); }
+    if (dateFrom)     { conditions.push(`s.submitted_at>=$${i++}`);  params.push(dateFrom); }
+    if (dateTo)       { conditions.push(`s.submitted_at<=$${i++}`);  params.push(dateTo); }
+
+    const { rows } = await db.query(`
+      SELECT s.id, e.title AS exam_title, e.subject AS exam_subject,
+             s.student_name, s.student_class, s.student_email,
+             s.submitted_at, s.time_taken, s.correct, s.total, s.pct, s.grade,
+             s.requires_review, s.review_completed
+      FROM submissions s
+      JOIN exams e ON e.id=s.exam_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY s.submitted_at DESC
+      LIMIT 5000
+    `, params);
+
+    const columns = [
+      { key: 'exam_title',      header: 'Exam' },
+      { key: 'exam_subject',    header: 'Subject' },
+      { key: 'student_name',    header: 'Student Name' },
+      { key: 'student_class',   header: 'Class' },
+      { key: 'student_email',   header: 'Email' },
+      { key: 'submitted_at',    header: 'Submitted At' },
+      { key: 'time_taken',      header: 'Time Taken (s)' },
+      { key: 'correct',         header: 'Correct' },
+      { key: 'total',           header: 'Total' },
+      { key: 'pct',             header: 'Score (%)' },
+      { key: 'grade',           header: 'Grade' },
+      { key: 'review_status',   header: 'Review Status' },
+    ];
+
+    const dataRows = rows.map(r => ({
+      ...r,
+      submitted_at: r.submitted_at ? new Date(r.submitted_at).toISOString().replace('T', ' ').slice(0, 19) : '',
+      review_status: r.requires_review
+        ? (r.review_completed ? 'Reviewed' : 'Needs Review')
+        : 'N/A',
+    }));
+
+    if (format === 'csv') {
+      const escape = v => {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const header = columns.map(c => c.header).join(',');
+      const body   = dataRows.map(r => columns.map(c => escape(r[c.key])).join(',')).join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="results.csv"');
+      return res.end(`${header}\n${body}`);
+    }
+
+    // XLSX
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'GradiSpace';
+    const ws = wb.addWorksheet('Results');
+    ws.columns = columns.map(c => ({ header: c.header, key: c.key, width: 20 }));
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF003865' } };
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    dataRows.forEach(r => ws.addRow(columns.map(c => r[c.key] ?? '')));
+
+    const buffer = await wb.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="results.xlsx"');
+    res.setHeader('Content-Length', buffer.length);
+    res.end(buffer);
   } catch (err) { next(err); }
 });
 

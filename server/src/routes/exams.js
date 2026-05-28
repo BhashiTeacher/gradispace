@@ -263,9 +263,10 @@ router.get('/:id/print-pdf', requireAuth, requirePlan('pro', 'school'), async (r
     });
 
     const safeName = (exam.title || 'exam').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 50);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_paper.pdf"`);
-    doc.pipe(res);
+
+    // Buffer the PDF so errors before doc.end() can still return a JSON error
+    const chunks = [];
+    doc.on('data', c => chunks.push(c));
 
     const W = doc.page.width - 100;  // content width
     const L = 50;                    // left margin
@@ -422,7 +423,17 @@ router.get('/:id/print-pdf', requireAuth, requirePlan('pro', 'school'), async (r
          .text(`${exam.title}   ·   Page ${i + 1} of ${range.count}`, L, fy + 7, { width: W, align: 'center' });
     }
 
-    doc.end();
+    await new Promise((resolve, reject) => {
+      doc.on('end', resolve);
+      doc.on('error', reject);
+      doc.end();
+    });
+
+    const pdfBuffer = Buffer.concat(chunks);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_paper.pdf"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.end(pdfBuffer);
   } catch (err) { next(err); }
 });
 

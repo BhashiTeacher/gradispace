@@ -3,7 +3,7 @@ import {
   ChartBarIcon, DocumentArrowDownIcon, TrashIcon,
   MagnifyingGlassIcon, XMarkIcon, ArrowDownTrayIcon,
   UserCircleIcon, ClipboardDocumentCheckIcon,
-  CheckCircleIcon,
+  CheckCircleIcon, EyeIcon, PrinterIcon,
 } from '@heroicons/react/24/outline';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip,
@@ -49,6 +49,394 @@ function StatCard({ label, value, sub, colour }) {
       <p className="text-2xl font-bold mb-0.5">{value ?? '—'}</p>
       <p className="text-sm font-medium text-slate-700">{label}</p>
       {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+// ── Detail Modal ──────────────────────────────────────────────────────────────
+function DetailModal({ submissionId, onClose }) {
+  const toast = useToast();
+  const [loading, setLoading]         = useState(true);
+  const [data, setData]               = useState(null);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+
+  useEffect(() => {
+    api.get(`/results/${submissionId}/detail`)
+      .then(d => setData(d))
+      .catch(err => { toast(err.message || 'Failed to load.', 'error'); onClose(); })
+      .finally(() => setLoading(false));
+  }, [submissionId]); // eslint-disable-line
+
+  function handlePrint() {
+    if (!data) return;
+    const { result: r, answers } = data;
+    const dateStr = new Date(r.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    const questionRows = answers.map((a, i) => {
+      const isShort   = a.type === 'short_answer';
+      const givenOpt  = a.options?.find(o => o.letter === a.given);
+      const correctOpt = a.options?.find(o => o.letter === a.correct);
+      const icon      = isShort ? '' : a.isCorrect ? '✓' : '✗';
+      const iconColor = a.isCorrect ? '#16a34a' : '#dc2626';
+
+      let answerHtml = '';
+      if (isShort) {
+        answerHtml = `
+          <div style="margin-top:4px;font-size:12px;color:#475569">
+            <strong>Student:</strong> ${a.given || '<em>No answer</em>'}
+          </div>
+          ${a.correct ? `<div style="font-size:12px;color:#475569"><strong>Expected:</strong> ${a.correct}</div>` : ''}
+          ${a.override?.teacher_note ? `<div style="font-size:11px;color:#64748b;font-style:italic">Note: ${a.override.teacher_note}</div>` : ''}`;
+      } else {
+        answerHtml = `
+          <div style="margin-top:4px;font-size:12px;color:${a.isCorrect ? '#15803d' : '#b91c1c'}">
+            Your answer: ${givenOpt?.text || a.given || '—'}
+          </div>
+          ${!a.isCorrect && a.correct ? `<div style="font-size:12px;color:#15803d">Correct: ${correctOpt?.text || a.correct}</div>` : ''}`;
+      }
+
+      const bg = isShort ? '#f8fafc' : a.isCorrect ? '#f0fdf4' : '#fef2f2';
+      return `
+        <div style="background:${bg};border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="display:flex;gap:8px;flex:1;">
+              <span style="font-size:11px;font-weight:700;color:#94a3b8;flex-shrink:0;">Q${i + 1}</span>
+              <span style="font-size:13px;color:#1e293b;">${a.stem}</span>
+            </div>
+            ${!isShort ? `<span style="font-size:14px;font-weight:700;color:${iconColor};flex-shrink:0;">${icon}</span>` : ''}
+          </div>
+          ${answerHtml}
+        </div>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Result – ${r.student_name}</title>
+      <style>body{font-family:Helvetica,Arial,sans-serif;margin:30px;color:#1e293b;}
+      h1{font-size:20px;margin:0 0 4px;}h2{font-size:13px;font-weight:normal;color:#64748b;margin:0 0 16px;}
+      .meta{display:flex;gap:24px;margin-bottom:16px;font-size:13px;color:#475569;}
+      .score{display:inline-block;padding:6px 18px;border-radius:6px;font-size:22px;font-weight:700;color:#fff;margin-bottom:16px;}
+      @media print{@page{margin:20mm;}}</style>
+    </head><body>
+      <h1>${r.exam_title}</h1>
+      <h2>${r.student_name}${r.student_class ? ' · ' + r.student_class : ''}${r.student_email ? ' · ' + r.student_email : ''}</h2>
+      <div class="meta"><span>Date: ${dateStr}</span>${r.exam_subject ? `<span>Subject: ${r.exam_subject}</span>` : ''}</div>
+      <div class="score" style="background:${{ Excellent:'#16a34a',Good:'#2563eb','Keep Practising':'#d97706','Try Again':'#dc2626' }[r.grade]||'#4f46e5'}">
+        ${r.pct}% — ${r.grade}
+      </div>
+      <p style="font-size:13px;color:#475569;margin-bottom:16px;">${r.correct}/${r.total} correct</p>
+      ${questionRows}
+      <p style="font-size:11px;color:#94a3b8;margin-top:24px;text-align:center;">Powered by GradiSpace</p>
+    </body></html>`;
+
+    const win = window.open('', '_blank', 'width=820,height=700');
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); }, 400);
+  }
+
+  async function handleDownloadPdf() {
+    if (!data || generatingPdf) return;
+    setGeneratingPdf(true);
+    try {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const PW = 210, ML = 15, MR = 15, CW = PW - ML - MR;
+      const { result: r, answers } = data;
+
+      const gradeRgb = {
+        'Excellent': [22,163,74], 'Good': [37,99,235],
+        'Keep Practising': [217,119,6], 'Try Again': [220,38,38],
+      }[r.grade] || [79,70,229];
+
+      let y = 0;
+      function ensurePage(needed = 20) {
+        if (y + needed > 277) { doc.addPage(); y = 15; }
+      }
+
+      // Top bar
+      doc.setFillColor(15, 23, 42);
+      doc.rect(0, 0, PW, 4, 'F');
+      y = 12;
+
+      // "Teacher Report" label
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(150, 150, 150);
+      doc.text('TEACHER REPORT', PW / 2, y, { align: 'center' });
+      y += 6;
+
+      // Exam title
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.setTextColor(17, 17, 17);
+      const titleLines = doc.splitTextToSize(r.exam_title, CW);
+      doc.text(titleLines, PW / 2, y, { align: 'center' });
+      y += titleLines.length * 6.5 + 2;
+
+      // Divider
+      doc.setDrawColor(220, 220, 220);
+      doc.line(ML, y, PW - MR, y);
+      y += 5;
+
+      // Student info
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(80, 80, 80);
+      const studentInfo = [r.student_name, r.student_class, r.student_email].filter(Boolean).join('  ·  ');
+      doc.text(studentInfo, ML, y);
+      const dateStr = new Date(r.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+      doc.text(dateStr, PW - MR, y, { align: 'right' });
+      y += 9;
+
+      // Score box
+      doc.setFillColor(...gradeRgb);
+      doc.rect(ML, y, CW, 22, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(22);
+      doc.setTextColor(255, 255, 255);
+      doc.text(`${r.pct}%`, PW / 2, y + 10, { align: 'center' });
+      doc.setFontSize(10);
+      doc.text(r.grade, PW / 2, y + 17, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(`${r.correct} / ${r.total} correct`, PW / 2, y + 21, { align: 'center' });
+      y += 27;
+
+      // Questions
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(51, 65, 85);
+      doc.text('Answer Review', ML, y);
+      y += 5;
+
+      answers.forEach((a, i) => {
+        const isShort    = a.type === 'short_answer';
+        const givenOpt   = a.options?.find(o => o.letter === a.given);
+        const correctOpt = a.options?.find(o => o.letter === a.correct);
+        const stemLines  = doc.splitTextToSize(a.stem, CW - 14);
+
+        let extraLines = 0;
+        if (isShort) {
+          if (a.given) extraLines += doc.splitTextToSize(`Student: ${a.given}`, CW - 14).length;
+          if (a.correct) extraLines += 1;
+          if (a.override?.teacher_note) extraLines += 1;
+        } else {
+          extraLines += 1;
+          if (!a.isCorrect && a.correct) extraLines += 1;
+        }
+        const boxH = 6 + stemLines.length * 4.5 + extraLines * 4.5 + 4;
+        ensurePage(boxH + 3);
+
+        const [fr, fg, fb] = isShort ? [248,250,252] : a.isCorrect ? [240,253,244] : [254,242,242];
+        doc.setFillColor(fr, fg, fb);
+        doc.rect(ML, y, CW, boxH, 'F');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(160, 160, 160);
+        doc.text(`Q${i + 1}`, ML + 2, y + 5);
+
+        if (!isShort) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10);
+          doc.setTextColor(...(a.isCorrect ? [22,163,74] : [220,38,38]));
+          doc.text(a.isCorrect ? '✓' : '✗', PW - MR - 2, y + 5, { align: 'right' });
+        }
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(30, 30, 30);
+        doc.text(stemLines, ML + 10, y + 5);
+        y += 5 + stemLines.length * 4.5 + 1;
+
+        if (isShort) {
+          doc.setFontSize(8);
+          if (a.given) {
+            const ansLines = doc.splitTextToSize(`Student: ${a.given}`, CW - 14);
+            doc.setTextColor(71, 85, 105);
+            doc.text(ansLines, ML + 10, y);
+            y += ansLines.length * 4.5;
+          }
+          if (a.correct) {
+            doc.setTextColor(21, 128, 61);
+            doc.text(`Expected: ${a.correct}`, ML + 10, y);
+            y += 4.5;
+          }
+          if (a.override?.teacher_note) {
+            doc.setTextColor(120, 120, 120);
+            doc.setFont('helvetica', 'italic');
+            doc.text(`Note: ${a.override.teacher_note}`, ML + 10, y);
+            doc.setFont('helvetica', 'normal');
+            y += 4.5;
+          }
+        } else {
+          doc.setFontSize(8);
+          doc.setTextColor(...(a.isCorrect ? [21,128,61] : [185,28,28]));
+          doc.text(`Student: ${givenOpt?.text || a.given || '—'}`, ML + 10, y);
+          y += 4.5;
+          if (!a.isCorrect && a.correct) {
+            doc.setTextColor(21, 128, 61);
+            doc.text(`Correct: ${correctOpt?.text || a.correct}`, ML + 10, y);
+            y += 4.5;
+          }
+        }
+        y += 4;
+      });
+
+      // Footer
+      const totalPages = doc.getNumberOfPages();
+      for (let p = 1; p <= totalPages; p++) {
+        doc.setPage(p);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(180, 180, 180);
+        doc.text(`Page ${p} of ${totalPages}  ·  Powered by GradiSpace`, PW / 2, 291, { align: 'center' });
+      }
+
+      const safeName = (r.student_name || 'student').replace(/[^\w\s]/g, '').trim().replace(/\s+/g, '_');
+      const safeExam = (r.exam_title   || 'exam').replace(/[^\w\s]/g, '').trim().replace(/\s+/g, '_');
+      doc.save(`teacher-report-${safeName}-${safeExam}-${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch (err) {
+      toast(err.message || 'PDF generation failed.', 'error');
+    } finally {
+      setGeneratingPdf(false);
+    }
+  }
+
+  const { result: r, answers = [] } = data || {};
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-start justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
+          <div>
+            <h2 className="font-bold text-slate-900">Answer Detail</h2>
+            {r && (
+              <p className="text-xs text-slate-500 mt-0.5">
+                {r.student_name}{r.student_class && ` · ${r.student_class}`}
+                {' · '}{r.exam_title}
+              </p>
+            )}
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 flex-shrink-0">
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Score strip */}
+        {r && (
+          <div className="flex items-center gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 flex-shrink-0">
+            <span className="text-2xl font-black text-slate-900">{r.pct}%</span>
+            <GradeBadge grade={r.grade} />
+            <span className="text-sm text-slate-500">{r.correct}/{r.total} correct</span>
+            {r.requires_review && !r.review_completed && (
+              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 ml-auto">
+                Needs Review
+              </span>
+            )}
+            {r.requires_review && r.review_completed && (
+              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 ml-auto">
+                Reviewed
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+          {loading && (
+            <div className="flex justify-center py-12">
+              <Spinner className="w-7 h-7 text-primary-500" />
+            </div>
+          )}
+
+          {!loading && answers.length === 0 && (
+            <p className="text-sm text-slate-500 text-center py-8">No answer data available.</p>
+          )}
+
+          {!loading && answers.map((a, i) => {
+            const isShort    = a.type === 'short_answer';
+            const givenOpt   = a.options?.find(o => o.letter === a.given);
+            const correctOpt = a.options?.find(o => o.letter === a.correct);
+            const bg = isShort ? 'border-slate-200' : a.isCorrect ? 'border-green-200 bg-green-50/40' : 'border-red-200 bg-red-50/40';
+
+            return (
+              <div key={a.questionId} className={`rounded-xl border p-4 space-y-2 ${bg}`}>
+                {/* Part label */}
+                {a.part && (
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{a.part}</p>
+                )}
+
+                {/* Stem + indicator */}
+                <div className="flex items-start gap-2">
+                  <span className="text-xs font-bold text-slate-400 shrink-0 mt-0.5 w-5">Q{i + 1}</span>
+                  <p className="text-sm text-slate-800 leading-snug flex-1">{a.stem}</p>
+                  {!isShort && (
+                    a.isCorrect
+                      ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                      : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-sm">✗</span>
+                  )}
+                </div>
+
+                {/* MCQ answer row */}
+                {!isShort && (
+                  <div className="flex flex-wrap gap-2 pl-7 text-xs">
+                    <span className={`px-2 py-0.5 rounded-full font-medium ${a.isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      Student: {givenOpt?.text || a.given || '—'}
+                    </span>
+                    {!a.isCorrect && a.correct && (
+                      <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                        Correct: {correctOpt?.text || a.correct}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Short answer */}
+                {isShort && (
+                  <div className="pl-7 space-y-1.5">
+                    <div className="bg-slate-100 rounded-lg px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap min-h-[32px]">
+                      {a.given || <span className="text-slate-400 italic">No answer given</span>}
+                    </div>
+                    {a.correct && (
+                      <div className="flex items-start gap-1.5 text-xs text-slate-500">
+                        <span className="font-medium shrink-0">Expected:</span>
+                        <span className="text-green-700 bg-green-50 rounded px-2 py-0.5">{a.correct}</span>
+                      </div>
+                    )}
+                    {a.override && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className={`px-2 py-0.5 rounded-full font-medium ${parseFloat(a.override.override_marks) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {parseFloat(a.override.override_marks) > 0 ? '✓ Marked correct' : '✗ Marked incorrect'}
+                        </span>
+                        {a.override.teacher_note && (
+                          <span className="text-slate-500 italic">{a.override.teacher_note}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        {!loading && (
+          <div className="px-6 py-4 border-t border-slate-200 flex items-center gap-2 flex-shrink-0">
+            <button onClick={handlePrint} className="btn-secondary btn-sm flex items-center gap-1.5">
+              <PrinterIcon className="w-4 h-4" /> Print
+            </button>
+            <button onClick={handleDownloadPdf} disabled={generatingPdf} className="btn-secondary btn-sm flex items-center gap-1.5">
+              {generatingPdf ? <Spinner className="w-4 h-4" /> : <ArrowDownTrayIcon className="w-4 h-4" />}
+              Download PDF
+            </button>
+            <button onClick={onClose} className="btn-ghost btn-sm ml-auto">Close</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -225,6 +613,7 @@ export default function Results() {
   const [exporting, setExporting]         = useState(false);
   const [filterNeedsReview, setFilterNeedsReview] = useState(false);
   const [reviewId, setReviewId]           = useState(null);
+  const [detailId, setDetailId]           = useState(null);
   const emailTimer                        = useRef(null);
 
   // ── Analytics tab ──
@@ -500,6 +889,19 @@ export default function Results() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {isPro ? (
+                                <button onClick={() => setDetailId(r.id)}
+                                  className="p-1.5 rounded hover:bg-primary-50 text-slate-300 hover:text-primary-600"
+                                  title="View answer detail">
+                                  <EyeIcon className="w-4 h-4" />
+                                </button>
+                              ) : (
+                                <button onClick={() => navigate('/billing')}
+                                  className="p-1.5 rounded text-slate-200 cursor-pointer"
+                                  title="Upgrade to Pro to view details">
+                                  <EyeIcon className="w-4 h-4" />
+                                </button>
+                              )}
                               {r.requires_review && !r.review_completed && isPro && (
                                 <button onClick={() => setReviewId(r.id)}
                                   className="p-1.5 rounded hover:bg-amber-50 text-slate-300 hover:text-amber-600"
@@ -645,6 +1047,14 @@ export default function Results() {
             )}
           </div>
         </ProGate>
+      )}
+
+      {/* Detail Modal */}
+      {detailId && (
+        <DetailModal
+          submissionId={detailId}
+          onClose={() => setDetailId(null)}
+        />
       )}
 
       {/* Review Modal */}

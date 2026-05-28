@@ -277,7 +277,8 @@ export default function ExamPage() {
   const [timeUpMsg, setTimeUpMsg]       = useState('');
 
   // Result
-  const [result, setResult] = useState(null);
+  const [result, setResult]       = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   const submitRef = useRef(null);
   const colour    = branding?.brandColour || '#4F46E5';
@@ -549,6 +550,200 @@ export default function ExamPage() {
     );
   }
 
+  async function handleDownloadPdf() {
+    if (downloadingPdf) return;
+    setDownloadingPdf(true);
+    try {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const PW = 210, ML = 15, MR = 15, CW = PW - ML - MR;
+
+      function parseHex(hex) {
+        const h = (hex || '').replace('#', '');
+        if (h.length !== 6) return [79, 70, 229];
+        return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+      }
+      const [br, bg, bb] = parseHex(colour);
+      const gradeRgb = {
+        'Excellent': [22,163,74], 'Good': [37,99,235],
+        'Keep Practising': [217,119,6], 'Try Again': [220,38,38],
+      }[result.grade] || [79,70,229];
+
+      let y = 0;
+
+      function ensurePage(needed = 20) {
+        if (y + needed > 277) { doc.addPage(); y = 15; }
+      }
+
+      // Brand bar
+      doc.setFillColor(br, bg, bb);
+      doc.rect(0, 0, PW, 4, 'F');
+      y = 12;
+
+      // Portal name
+      if (branding?.portalName) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(120, 120, 120);
+        doc.text(branding.portalName.toUpperCase(), PW / 2, y, { align: 'center' });
+        y += 5;
+      }
+
+      // Exam title
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.setTextColor(17, 17, 17);
+      const titleLines = doc.splitTextToSize(exam?.title || 'Exam Result', CW);
+      doc.text(titleLines, PW / 2, y, { align: 'center' });
+      y += titleLines.length * 6 + 2;
+
+      // Divider
+      doc.setDrawColor(220, 220, 220);
+      doc.line(ML, y, PW - MR, y);
+      y += 5;
+
+      // Student info + date
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(80, 80, 80);
+      const infoParts = [name, cls, email].filter(Boolean);
+      if (infoParts.length) doc.text(infoParts.join('  ·  '), ML, y);
+      doc.text(new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }), PW - MR, y, { align: 'right' });
+      y += 9;
+
+      // Provisional banner
+      if (result.requiresReview) {
+        doc.setFillColor(255, 251, 235);
+        doc.setDrawColor(217, 119, 6);
+        doc.rect(ML, y, CW, 10, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(146, 64, 14);
+        doc.text('PROVISIONAL RESULT — Pending teacher review', PW / 2, y + 6.5, { align: 'center' });
+        y += 15;
+      }
+
+      // Score box
+      doc.setFillColor(...gradeRgb);
+      doc.rect(ML, y, CW, 28, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(26);
+      doc.setTextColor(255, 255, 255);
+      doc.text(`${result.pct}%`, PW / 2, y + 13, { align: 'center' });
+      doc.setFontSize(10);
+      doc.text(result.grade, PW / 2, y + 20.5, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(`${result.correct} / ${result.total} correct`, PW / 2, y + 26, { align: 'center' });
+      y += 33;
+
+      // Part breakdown
+      const parts = Object.entries(result.breakdown || {});
+      if (parts.length > 1) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(51, 65, 85);
+        doc.text('Score Breakdown', ML, y);
+        y += 5;
+        for (const [part, b] of parts) {
+          const pct = b.total ? Math.round((b.correct / b.total) * 100) : 0;
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(80, 80, 80);
+          doc.text(part, ML, y);
+          doc.text(`${b.correct}/${b.total}  ${pct}%`, PW - MR, y, { align: 'right' });
+          y += 3.5;
+          doc.setFillColor(226, 232, 240);
+          doc.rect(ML, y, CW, 2, 'F');
+          doc.setFillColor(br, bg, bb);
+          doc.rect(ML, y, CW * pct / 100, 2, 'F');
+          y += 6;
+        }
+        y += 2;
+      }
+
+      // Question review (detailed mode only)
+      if (exam?.resultView === 'detailed' && result.answers && questions.length > 0) {
+        ensurePage(20);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(51, 65, 85);
+        doc.text('Question Review', ML, y);
+        y += 5;
+
+        questions.forEach((q, i) => {
+          const det = result.answers[q.id];
+          if (!det) return;
+          const isShort   = q.type === 'short_answer';
+          const givenOpt  = q.options?.find(o => o.letter === det.given);
+          const correctOpt = q.options?.find(o => o.letter === det.correct);
+          const stemLines = doc.splitTextToSize(q.stem, CW - 14);
+          const boxH = 6 + stemLines.length * 4.5 + (isShort && det.given ? 8 : 0) + (!isShort ? 8 : 0) + 3;
+          ensurePage(boxH + 3);
+
+          const [fr, fg, fb] = isShort ? [248,250,252] : det.isCorrect ? [240,253,244] : [254,242,242];
+          doc.setFillColor(fr, fg, fb);
+          doc.rect(ML, y, CW, boxH, 'F');
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(7.5);
+          doc.setTextColor(160, 160, 160);
+          doc.text(`Q${i + 1}`, ML + 2, y + 5);
+
+          if (!isShort) {
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            doc.setTextColor(...(det.isCorrect ? [22,163,74] : [220,38,38]));
+            doc.text(det.isCorrect ? '✓' : '✗', PW - MR - 2, y + 5, { align: 'right' });
+          }
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(30, 30, 30);
+          doc.text(stemLines, ML + 10, y + 5);
+          y += 5 + stemLines.length * 4.5 + 1;
+
+          if (!isShort) {
+            doc.setFontSize(8);
+            doc.setTextColor(...(det.isCorrect ? [21,128,61] : [185,28,28]));
+            doc.text(`Your answer: ${givenOpt?.text || det.given || '—'}`, ML + 10, y);
+            y += 4;
+            if (!det.isCorrect && det.correct) {
+              doc.setTextColor(21, 128, 61);
+              doc.text(`Correct: ${correctOpt?.text || det.correct}`, ML + 10, y);
+              y += 4;
+            }
+          } else if (det.given) {
+            doc.setFontSize(8);
+            doc.setTextColor(80, 80, 80);
+            const ansLines = doc.splitTextToSize(`Your answer: ${det.given}`, CW - 14);
+            doc.text(ansLines, ML + 10, y);
+            y += ansLines.length * 4 + 1;
+          }
+          y += 5;
+        });
+      }
+
+      // Footer
+      const totalPages = doc.getNumberOfPages();
+      for (let p = 1; p <= totalPages; p++) {
+        doc.setPage(p);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(180, 180, 180);
+        doc.text('Powered by GradiSpace', PW / 2, 291, { align: 'center' });
+      }
+
+      const safeName = (name || 'student').replace(/[^\w\s]/g, '').trim().replace(/\s+/g, '_');
+      const safeExam = (exam?.title || 'exam').replace(/[^\w\s]/g, '').trim().replace(/\s+/g, '_');
+      doc.save(`result-${safeName}-${safeExam}-${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch (err) {
+      console.error('PDF error', err);
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
+
   // ── RESULT ──
   if (phase === 'result' && result) {
     const gradeColour = GRADE_COLOUR[result.grade] || '#4F46E5';
@@ -656,6 +851,21 @@ export default function ExamPage() {
               </div>
             </div>
           )}
+
+          {/* Download PDF */}
+          <button
+            onClick={handleDownloadPdf}
+            disabled={downloadingPdf}
+            className="w-full py-3 rounded-2xl border-2 border-slate-200 text-sm font-semibold text-slate-600 flex items-center justify-center gap-2 bg-white hover:bg-slate-50 transition-colors disabled:opacity-50">
+            {downloadingPdf ? (
+              <Spinner className="w-4 h-4" />
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+            )}
+            Download Result PDF
+          </button>
 
           {/* Footer message */}
           {branding?.footerMessage && (

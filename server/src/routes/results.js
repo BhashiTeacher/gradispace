@@ -350,4 +350,64 @@ router.post('/:id/review', requireAuth, requirePlan('pro', 'school'), async (req
   } catch (err) { next(err); }
 });
 
+// GET /api/v1/results/:id/detail  — full question-by-question breakdown for teacher (Pro)
+router.get('/:id/detail', requireAuth, requirePlan('pro', 'school'), async (req, res, next) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT s.*, e.title AS exam_title, e.subject AS exam_subject
+      FROM submissions s JOIN exams e ON e.id=s.exam_id
+      WHERE s.id=$1 AND e.teacher_id=$2
+    `, [req.params.id, req.teacherId]);
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+    const sub = rows[0];
+    const answers = sub.answers || {};
+
+    const { rows: qRows } = await db.query(`
+      SELECT q.id,
+             COALESCE(eq.stem, q.stem)     AS stem,
+             COALESCE(eq.answer, q.answer) AS answer,
+             COALESCE(eq.type, q.type)     AS type,
+             COALESCE(eq.options, q.options) AS options,
+             eq.order_num, eq.part
+      FROM exam_questions eq
+      JOIN questions q ON q.id=eq.question_id
+      WHERE eq.exam_id=$1 ORDER BY eq.order_num
+    `, [sub.exam_id]);
+
+    const { rows: overrideRows } = await db.query(
+      'SELECT * FROM submission_answer_overrides WHERE submission_id=$1',
+      [sub.id]
+    );
+    const overrideMap = {};
+    overrideRows.forEach(o => { overrideMap[o.question_id] = o; });
+
+    const norm = s => (s || '').toString().trim().toLowerCase();
+    const detail = qRows.map(q => {
+      const given    = answers[q.id] ?? null;
+      const override = overrideMap[q.id] || null;
+      let isCorrect;
+      if (override) {
+        isCorrect = parseFloat(override.override_marks) > 0;
+      } else if (q.type === 'short_answer') {
+        isCorrect = q.answer ? norm(given) === norm(q.answer) : null;
+      } else {
+        isCorrect = given !== null ? given === q.answer : false;
+      }
+      return {
+        questionId: q.id,
+        stem:       q.stem,
+        type:       q.type,
+        part:       q.part,
+        options:    q.options || [],
+        given,
+        correct:    q.answer,
+        isCorrect,
+        override:   override ? { override_marks: override.override_marks, teacher_note: override.teacher_note } : null,
+      };
+    });
+
+    res.json({ result: sub, answers: detail });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

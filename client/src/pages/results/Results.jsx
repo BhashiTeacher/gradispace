@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import {
   ChartBarIcon, DocumentArrowDownIcon, TrashIcon,
   MagnifyingGlassIcon, XMarkIcon, ArrowDownTrayIcon,
-  UserCircleIcon, ExclamationCircleIcon,
+  UserCircleIcon, ClipboardDocumentCheckIcon,
+  CheckCircleIcon,
 } from '@heroicons/react/24/outline';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip,
@@ -52,10 +53,160 @@ function StatCard({ label, value, sub, colour }) {
   );
 }
 
+// ── Review Modal ──────────────────────────────────────────────────────────────
+function ReviewModal({ submissionId, onClose, onSaved }) {
+  const toast = useToast();
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [subData, setSubData]   = useState(null);
+  const [marks, setMarks]       = useState({});  // questionId → 0 | 1
+  const [notes, setNotes]       = useState({});  // questionId → string
+
+  useEffect(() => {
+    api.get(`/results/${submissionId}/for-review`)
+      .then(data => {
+        setSubData(data);
+        const initMarks = {};
+        const initNotes = {};
+        data.answers.forEach(a => {
+          if (a.type !== 'short_answer') return;
+          if (a.override) {
+            initMarks[a.questionId] = parseFloat(a.override.override_marks) > 0 ? 1 : 0;
+            initNotes[a.questionId] = a.override.teacher_note || '';
+          } else {
+            // Default: if auto-matched (isCorrect===true) → 1, else 0
+            initMarks[a.questionId] = a.isCorrect === true ? 1 : 0;
+            initNotes[a.questionId] = '';
+          }
+        });
+        setMarks(initMarks);
+        setNotes(initNotes);
+      })
+      .catch(err => { toast(err.message || 'Failed to load.', 'error'); onClose(); })
+      .finally(() => setLoading(false));
+  }, [submissionId]); // eslint-disable-line
+
+  async function handleSave() {
+    setSaving(true);
+    const shortAnswerQs = (subData?.answers || []).filter(a => a.type === 'short_answer');
+    const overrides = shortAnswerQs.map(a => ({
+      questionId: a.questionId,
+      overrideMarks: marks[a.questionId] ?? 0,
+      teacherNote: notes[a.questionId] || null,
+    }));
+    try {
+      const res = await api.post(`/results/${submissionId}/review`, { overrides });
+      toast(`Review saved. Final score: ${res.pct}% — ${res.grade}`, 'success');
+      onSaved(submissionId, res);
+      onClose();
+    } catch (err) {
+      toast(err.message || 'Failed to save review.', 'error');
+    } finally { setSaving(false); }
+  }
+
+  const shortAnswers = (subData?.answers || []).filter(a => a.type === 'short_answer');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
+          <div>
+            <h2 className="font-bold text-slate-900">Review Written Answers</h2>
+            {subData && (
+              <p className="text-xs text-slate-500 mt-0.5">
+                {subData.result.student_name}
+                {subData.result.student_class && ` · ${subData.result.student_class}`}
+                {' · '}{subData.result.exam_title}
+              </p>
+            )}
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {loading && <div className="flex justify-center py-12"><Spinner className="w-7 h-7 text-primary-500" /></div>}
+
+          {!loading && shortAnswers.length === 0 && (
+            <p className="text-sm text-slate-500 text-center py-8">No written answers to review.</p>
+          )}
+
+          {!loading && shortAnswers.map((a, i) => (
+            <div key={a.questionId} className="border border-slate-200 rounded-xl p-4 space-y-3">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Question {i + 1}</p>
+              <p className="text-sm font-medium text-slate-800 leading-snug">{a.stem}</p>
+
+              {/* Student's answer */}
+              <div>
+                <p className="text-xs text-slate-500 mb-1 font-medium">Student's answer</p>
+                <div className="bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap min-h-[40px]">
+                  {a.given || <span className="text-slate-400 italic">No answer given</span>}
+                </div>
+              </div>
+
+              {/* Expected answer */}
+              {a.correct && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1 font-medium">Expected answer</p>
+                  <div className="bg-green-50 rounded-lg px-3 py-2 text-sm text-green-800">{a.correct}</div>
+                </div>
+              )}
+
+              {/* Mark toggle */}
+              <div className="flex items-center gap-3 pt-1">
+                <p className="text-xs font-medium text-slate-600 mr-1">Mark as:</p>
+                <button
+                  onClick={() => setMarks(m => ({ ...m, [a.questionId]: 1 }))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition-colors
+                    ${marks[a.questionId] === 1
+                      ? 'bg-green-500 border-green-500 text-white'
+                      : 'border-slate-200 text-slate-600 hover:border-green-400 hover:text-green-600'}`}>
+                  ✓ Correct
+                </button>
+                <button
+                  onClick={() => setMarks(m => ({ ...m, [a.questionId]: 0 }))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition-colors
+                    ${marks[a.questionId] === 0
+                      ? 'bg-red-500 border-red-500 text-white'
+                      : 'border-slate-200 text-slate-600 hover:border-red-400 hover:text-red-600'}`}>
+                  ✗ Incorrect
+                </button>
+              </div>
+
+              {/* Teacher note */}
+              <input
+                type="text"
+                placeholder="Teacher note (optional)"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-primary-400"
+                value={notes[a.questionId] || ''}
+                onChange={e => setNotes(n => ({ ...n, [a.questionId]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        {!loading && shortAnswers.length > 0 && (
+          <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3 flex-shrink-0">
+            <button onClick={onClose} className="btn-secondary btn-sm">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary btn-sm flex items-center gap-1.5">
+              {saving ? <Spinner className="w-4 h-4" /> : <CheckCircleIcon className="w-4 h-4" />}
+              Finalise Result
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Results() {
   const { isPro } = useAuth();
-  const { toast } = useToast();
+  const toast = useToast();
   const navigate  = useNavigate();
 
   const [tab, setTab] = useState('results');
@@ -72,6 +223,8 @@ export default function Results() {
   const [filterEmail, setFilterEmail]     = useState('');
   const [deleting, setDeleting]           = useState(null);
   const [exporting, setExporting]         = useState(false);
+  const [filterNeedsReview, setFilterNeedsReview] = useState(false);
+  const [reviewId, setReviewId]           = useState(null);
   const emailTimer                        = useRef(null);
 
   // ── Analytics tab ──
@@ -91,7 +244,7 @@ export default function Results() {
   }, []);
 
   // Load results on filters change
-  useEffect(() => { loadResults(1); }, [filterExam, filterFrom, filterTo]); // eslint-disable-line
+  useEffect(() => { loadResults(1); }, [filterExam, filterFrom, filterTo, filterNeedsReview]); // eslint-disable-line
 
   function buildParams(extra = {}) {
     const p = new URLSearchParams(extra);
@@ -99,20 +252,30 @@ export default function Results() {
     if (filterFrom)  p.set('dateFrom', filterFrom);
     if (filterTo)    p.set('dateTo',   filterTo);
     if (filterEmail) p.set('studentEmail', filterEmail);
+    if (filterNeedsReview) p.set('needsReview', 'true');
     return p;
   }
 
-  function loadResults(p = page, email = filterEmail) {
+  function loadResults(p = page, email = filterEmail, needsReview = filterNeedsReview) {
     setResultsLoading(true);
     const params = new URLSearchParams({ page: p, limit: LIMIT });
     if (filterExam)  params.set('examId',       filterExam);
     if (filterFrom)  params.set('dateFrom',      filterFrom);
     if (filterTo)    params.set('dateTo',        filterTo);
     if (email)       params.set('studentEmail',  email);
+    if (needsReview) params.set('needsReview',   'true');
     api.get(`/results?${params}`)
       .then(({ results: rs, total: t }) => { setResults(rs); setTotal(t); setPage(p); })
       .catch(() => toast('Failed to load results.', 'error'))
       .finally(() => setResultsLoading(false));
+  }
+
+  function onReviewSaved(subId, updated) {
+    setResults(prev => prev.map(r =>
+      r.id === subId
+        ? { ...r, correct: updated.correct, total: updated.total, pct: updated.pct, grade: updated.grade, review_completed: true }
+        : r
+    ));
   }
 
   function onEmailChange(val) {
@@ -122,8 +285,8 @@ export default function Results() {
   }
 
   function clearFilters() {
-    setFilterExam(''); setFilterFrom(''); setFilterTo(''); setFilterEmail('');
-    loadResults(1, '');
+    setFilterExam(''); setFilterFrom(''); setFilterTo(''); setFilterEmail(''); setFilterNeedsReview(false);
+    loadResults(1, '', false);
   }
 
   async function handleDelete(id) {
@@ -196,7 +359,7 @@ export default function Results() {
   }
 
   const pages   = Math.ceil(total / LIMIT);
-  const hasFilters = filterExam || filterFrom || filterTo || filterEmail;
+  const hasFilters = filterExam || filterFrom || filterTo || filterEmail || filterNeedsReview;
 
   return (
     <div>
@@ -240,6 +403,12 @@ export default function Results() {
               <span className="text-slate-400 text-sm">to</span>
               <input type="date" className="input w-36" value={filterTo}
                 onChange={e => setFilterTo(e.target.value)} />
+              <button
+                onClick={() => setFilterNeedsReview(v => !v)}
+                className={`btn-sm flex items-center gap-1.5 ${filterNeedsReview ? 'btn-primary' : 'btn-secondary'}`}>
+                <ClipboardDocumentCheckIcon className="w-4 h-4" />
+                Needs Review {isPro && <ProBadge />}
+              </button>
               {hasFilters && (
                 <button onClick={clearFilters} className="btn-ghost btn-sm">
                   <XMarkIcon className="w-4 h-4 mr-1" /> Clear
@@ -284,6 +453,7 @@ export default function Results() {
                         <th className="px-4 py-3 text-left hidden md:table-cell">Exam</th>
                         <th className="px-4 py-3 text-center">Score</th>
                         <th className="px-4 py-3 text-center">Grade</th>
+                        <th className="px-4 py-3 text-center hidden sm:table-cell">Status</th>
                         <th className="px-4 py-3 text-left hidden lg:table-cell">Time</th>
                         <th className="px-4 py-3 text-left hidden lg:table-cell">Date</th>
                         <th className="px-4 py-3 w-8" />
@@ -312,15 +482,36 @@ export default function Results() {
                           <td className="px-4 py-3 text-center">
                             <GradeBadge grade={r.grade} />
                           </td>
+                          <td className="px-4 py-3 text-center hidden sm:table-cell">
+                            {r.requires_review && !r.review_completed && (
+                              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap">
+                                Needs Review
+                              </span>
+                            )}
+                            {r.requires_review && r.review_completed && (
+                              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 whitespace-nowrap">
+                                Reviewed
+                              </span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.time_taken || '—'}</td>
                           <td className="px-4 py-3 text-slate-500 hidden lg:table-cell whitespace-nowrap">
                             {new Date(r.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
                           </td>
                           <td className="px-4 py-3">
-                            <button onClick={() => handleDelete(r.id)} disabled={deleting === r.id}
-                              className="p-1.5 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                              {deleting === r.id ? <Spinner className="w-4 h-4" /> : <TrashIcon className="w-4 h-4" />}
-                            </button>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {r.requires_review && !r.review_completed && isPro && (
+                                <button onClick={() => setReviewId(r.id)}
+                                  className="p-1.5 rounded hover:bg-amber-50 text-slate-300 hover:text-amber-600"
+                                  title="Review written answers">
+                                  <ClipboardDocumentCheckIcon className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button onClick={() => handleDelete(r.id)} disabled={deleting === r.id}
+                                className="p-1.5 rounded hover:bg-red-50 text-slate-300 hover:text-red-500">
+                                {deleting === r.id ? <Spinner className="w-4 h-4" /> : <TrashIcon className="w-4 h-4" />}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -454,6 +645,15 @@ export default function Results() {
             )}
           </div>
         </ProGate>
+      )}
+
+      {/* Review Modal */}
+      {reviewId && (
+        <ReviewModal
+          submissionId={reviewId}
+          onClose={() => setReviewId(null)}
+          onSaved={onReviewSaved}
+        />
       )}
 
       {/* ── Reports tab ── */}

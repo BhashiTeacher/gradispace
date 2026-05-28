@@ -557,6 +557,17 @@ export default function ExamPage() {
       <div className="min-h-screen bg-slate-100">
         <BrandHeader branding={branding} title={exam?.title} />
         <div className="max-w-lg mx-auto px-4 pb-12 space-y-4">
+          {/* Provisional result banner */}
+          {result.requiresReview && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+              <p className="text-sm font-semibold text-amber-800">⏳ Provisional Result</p>
+              <p className="text-xs text-amber-600 mt-1 leading-relaxed">
+                This result includes written answers that will be reviewed by your teacher.
+                Your final score may change after review.
+              </p>
+            </div>
+          )}
+
           {/* Score card */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center">
             <div className="text-6xl font-black mb-1" style={{ color: gradeColour }}>{result.pct}%</div>

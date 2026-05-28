@@ -6,7 +6,7 @@ const { requirePlan } = require('../middleware/plan');
 // GET /api/v1/results
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const { examId, studentEmail, gradeLevel, subject, dateFrom, dateTo, page = 1, limit = 50 } = req.query;
+    const { examId, studentEmail, gradeLevel, subject, dateFrom, dateTo, needsReview, page = 1, limit = 50 } = req.query;
     const conditions = ['e.teacher_id=$1', 's.submitted_at IS NOT NULL'];
     const params = [req.teacherId];
     let i = 2;
@@ -16,6 +16,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     if (subject)      { conditions.push(`e.subject=$${i++}`);        params.push(subject); }
     if (dateFrom)     { conditions.push(`s.submitted_at>=$${i++}`);  params.push(dateFrom); }
     if (dateTo)       { conditions.push(`s.submitted_at<=$${i++}`);  params.push(dateTo); }
+    if (needsReview === 'true') { conditions.push(`s.requires_review=true AND s.review_completed=false`); }
 
     const where  = 'WHERE ' + conditions.join(' AND ');
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -24,7 +25,8 @@ router.get('/', requireAuth, async (req, res, next) => {
       db.query(`
         SELECT s.id, e.title AS exam_title, e.subject AS exam_subject,
                s.student_name, s.student_class, s.student_email,
-               s.submitted_at, s.time_taken, s.correct, s.total, s.pct, s.grade
+               s.submitted_at, s.time_taken, s.correct, s.total, s.pct, s.grade,
+               s.requires_review, s.review_completed
         FROM submissions s
         JOIN exams e ON e.id=s.exam_id
         ${where}
@@ -137,6 +139,133 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     );
     if (!rowCount) return res.status(404).json({ error: 'not_found' });
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// GET /api/v1/results/:id/for-review  — full detail with short-answer review data (Pro)
+router.get('/:id/for-review', requireAuth, requirePlan('pro', 'school'), async (req, res, next) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT s.*, e.title AS exam_title, e.subject AS exam_subject
+      FROM submissions s JOIN exams e ON e.id=s.exam_id
+      WHERE s.id=$1 AND e.teacher_id=$2
+    `, [req.params.id, req.teacherId]);
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+    const sub = rows[0];
+    const answers = sub.answers || {};
+
+    const { rows: qRows } = await db.query(`
+      SELECT q.id, COALESCE(eq.stem, q.stem) AS stem,
+             COALESCE(eq.answer, q.answer) AS answer,
+             COALESCE(eq.type, q.type) AS type,
+             eq.order_num, eq.part
+      FROM exam_questions eq
+      JOIN questions q ON q.id=eq.question_id
+      WHERE eq.exam_id=$1 ORDER BY eq.order_num
+    `, [sub.exam_id]);
+
+    const { rows: overrideRows } = await db.query(
+      'SELECT * FROM submission_answer_overrides WHERE submission_id=$1',
+      [sub.id]
+    );
+    const overrideMap = {};
+    overrideRows.forEach(o => { overrideMap[o.question_id] = o; });
+
+    const detail = qRows.map(q => ({
+      questionId: q.id,
+      stem: q.stem,
+      type: q.type,
+      part: q.part,
+      given: answers[q.id] ?? null,
+      correct: q.answer,
+      isCorrect: q.type === 'short_answer' ? null : answers[q.id] === q.answer,
+      override: overrideMap[q.id] || null,
+    }));
+
+    res.json({ result: sub, answers: detail });
+  } catch (err) { next(err); }
+});
+
+// POST /api/v1/results/:id/review  — save overrides and finalise (Pro)
+router.post('/:id/review', requireAuth, requirePlan('pro', 'school'), async (req, res, next) => {
+  try {
+    const { overrides = [] } = req.body;
+
+    const { rows } = await db.query(`
+      SELECT s.*, e.id AS exam_id FROM submissions s
+      JOIN exams e ON e.id=s.exam_id
+      WHERE s.id=$1 AND e.teacher_id=$2
+    `, [req.params.id, req.teacherId]);
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+    const sub = rows[0];
+
+    const client = await db.getClient();
+    try {
+      await client.query('BEGIN');
+
+      // Upsert overrides (delete + insert per question)
+      for (const o of overrides) {
+        await client.query(
+          'DELETE FROM submission_answer_overrides WHERE submission_id=$1 AND question_id=$2',
+          [sub.id, o.questionId]
+        );
+        await client.query(
+          'INSERT INTO submission_answer_overrides(submission_id, question_id, override_marks, teacher_note) VALUES($1,$2,$3,$4)',
+          [sub.id, o.questionId, o.overrideMarks, o.teacherNote || null]
+        );
+      }
+
+      // Recalculate score using all overrides
+      const { rows: qRows } = await client.query(`
+        SELECT q.id, COALESCE(eq.answer, q.answer) AS answer,
+               COALESCE(eq.type, q.type) AS type, eq.part
+        FROM exam_questions eq JOIN questions q ON q.id=eq.question_id
+        WHERE eq.exam_id=$1 ORDER BY eq.order_num
+      `, [sub.exam_id]);
+
+      const { rows: allOverrides } = await client.query(
+        'SELECT * FROM submission_answer_overrides WHERE submission_id=$1', [sub.id]
+      );
+      const overrideMap = {};
+      allOverrides.forEach(o => { overrideMap[o.question_id] = o; });
+
+      const answers = sub.answers || {};
+      let correct = 0;
+      const breakdown = {};
+      const norm = s => (s || '').toString().trim().toLowerCase();
+
+      qRows.forEach(q => {
+        const part = q.part || 'Part 1';
+        if (!breakdown[part]) breakdown[part] = { correct: 0, total: 0 };
+        breakdown[part].total++;
+        const given = answers[q.id] ?? null;
+        const override = overrideMap[q.id];
+        let isCorrect;
+        if (override) {
+          isCorrect = parseFloat(override.override_marks) > 0;
+        } else if (q.type === 'short_answer') {
+          isCorrect = q.answer && norm(given) === norm(q.answer);
+        } else {
+          isCorrect = given === q.answer;
+        }
+        if (isCorrect) { correct++; breakdown[part].correct++; }
+      });
+
+      const total = qRows.length;
+      const pct   = total ? Math.round((correct / total) * 100) : 0;
+      const grade = pct >= 80 ? 'Excellent' : pct >= 60 ? 'Good' : pct >= 40 ? 'Keep Practising' : 'Try Again';
+
+      await client.query(`
+        UPDATE submissions SET
+          correct=$1, total=$2, pct=$3, grade=$4, breakdown=$5,
+          review_completed=true, reviewed_at=NOW(), reviewed_by=$6
+        WHERE id=$7
+      `, [correct, total, pct, grade, JSON.stringify(breakdown), req.teacherId, sub.id]);
+
+      await client.query('COMMIT');
+      res.json({ ok: true, correct, total, pct, grade });
+    } catch (e) { await client.query('ROLLBACK'); throw e; }
+    finally { client.release(); }
   } catch (err) { next(err); }
 });
 

@@ -101,7 +101,7 @@ router.post('/exam/:token/submit', async (req, res, next) => {
 
     // Grade
     const { rows: qRows } = await db.query(`
-      SELECT q.id, q.type, q.answer, eq.part
+      SELECT q.id, COALESCE(eq.type, q.type) AS type, COALESCE(eq.answer, q.answer) AS answer, eq.part
       FROM exam_questions eq JOIN questions q ON q.id=eq.question_id
       WHERE eq.exam_id=$1 ORDER BY eq.order_num
     `, [sub.exam_id]);
@@ -109,6 +109,8 @@ router.post('/exam/:token/submit', async (req, res, next) => {
     let correct = 0;
     const breakdown = {};
     const answerDetail = {};
+    let requiresReview = false;
+    const norm = s => (s || '').toString().trim().toLowerCase();
 
     qRows.forEach(q => {
       const part = q.part || 'Part 1';
@@ -116,9 +118,18 @@ router.post('/exam/:token/submit', async (req, res, next) => {
       breakdown[part].total++;
       const given = answers[q.id] ?? null;
       const isShort = q.type === 'short_answer';
-      const isCorrect = !isShort && given === q.answer;
-      if (isCorrect) { correct++; breakdown[part].correct++; }
-      answerDetail[q.id] = { given, correct: q.answer, isCorrect: isShort ? null : isCorrect };
+
+      let isCorrect;
+      if (isShort) {
+        const autoMatch = q.answer && norm(given) === norm(q.answer);
+        isCorrect = autoMatch ? true : null;
+        if (autoMatch) { correct++; breakdown[part].correct++; }
+        else requiresReview = true;
+      } else {
+        isCorrect = given === q.answer;
+        if (isCorrect) { correct++; breakdown[part].correct++; }
+      }
+      answerDetail[q.id] = { given, correct: q.answer, isCorrect };
     });
 
     const total = qRows.length;
@@ -131,11 +142,12 @@ router.post('/exam/:token/submit', async (req, res, next) => {
 
     await db.query(`
       UPDATE submissions SET
-        submitted_at=NOW(), answers=$1, correct=$2, total=$3, pct=$4, grade=$5, time_taken=$6, breakdown=$7
-      WHERE session_token=$8
-    `, [JSON.stringify(answers), correct, total, pct, grade, timeTaken, JSON.stringify(breakdown), sessionToken]);
+        submitted_at=NOW(), answers=$1, correct=$2, total=$3, pct=$4, grade=$5, time_taken=$6, breakdown=$7,
+        requires_review=$8
+      WHERE session_token=$9
+    `, [JSON.stringify(answers), correct, total, pct, grade, timeTaken, JSON.stringify(breakdown), requiresReview, sessionToken]);
 
-    res.json({ result: { correct, total, pct, grade, timeTaken, breakdown, answers: answerDetail } });
+    res.json({ result: { correct, total, pct, grade, timeTaken, breakdown, answers: answerDetail, requiresReview } });
   } catch (err) { next(err); }
 });
 

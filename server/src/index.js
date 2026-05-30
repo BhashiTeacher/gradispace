@@ -25,6 +25,7 @@ app.use(cors({
     cb(Object.assign(new Error(`CORS: origin not allowed — ${origin}`), { status: 403 }));
   },
   credentials: true,
+  exposedHeaders: ['Content-Disposition'],
 }));
 
 // ── Security headers ─────────────────────────────────────────────

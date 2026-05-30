@@ -73,37 +73,32 @@ function DetailModal({ submissionId, onClose }) {
     const dateStr = new Date(r.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
     const questionRows = answers.map((a, i) => {
-      const isShort   = a.type === 'short_answer';
-      const givenOpt  = a.options?.find(o => o.letter === a.given);
+      const isShort    = a.type === 'short_answer';
+      const isCorrect  = a.isCorrect === true;
+      const givenOpt   = a.options?.find(o => o.letter === a.given);
       const correctOpt = a.options?.find(o => o.letter === a.correct);
-      const icon      = isShort ? '' : a.isCorrect ? '✓' : '✗';
-      const iconColor = a.isCorrect ? '#16a34a' : '#dc2626';
+      const givenText  = isShort ? (a.given || '—') : (givenOpt?.text || a.given || '—');
+      const correctText = isShort ? a.correct : (correctOpt?.text || a.correct);
+      const answerLabel = isShort ? 'Expected' : 'Correct';
+      const iconColor  = isCorrect ? '#16a34a' : '#dc2626';
 
-      let answerHtml = '';
-      if (isShort) {
-        answerHtml = `
-          <div style="margin-top:4px;font-size:12px;color:#475569">
-            <strong>Student:</strong> ${a.given || '<em>No answer</em>'}
-          </div>
-          ${a.correct ? `<div style="font-size:12px;color:#475569"><strong>Expected:</strong> ${a.correct}</div>` : ''}
-          ${a.override?.teacher_note ? `<div style="font-size:11px;color:#64748b;font-style:italic">Note: ${a.override.teacher_note}</div>` : ''}`;
-      } else {
-        answerHtml = `
-          <div style="margin-top:4px;font-size:12px;color:${a.isCorrect ? '#15803d' : '#b91c1c'}">
-            Your answer: ${givenOpt?.text || a.given || '—'}
-          </div>
-          ${!a.isCorrect && a.correct ? `<div style="font-size:12px;color:#15803d">Correct: ${correctOpt?.text || a.correct}</div>` : ''}`;
-      }
+      const answerHtml = `
+        <div style="margin-top:4px;font-size:12px;color:${isCorrect ? '#15803d' : '#b91c1c'}">
+          <strong>Student:</strong> ${givenText}
+        </div>
+        ${!isCorrect && a.correct ? `<div style="font-size:12px;color:#15803d"><strong>${answerLabel}:</strong> ${correctText}</div>` : ''}
+        ${a.override?.teacher_note ? `<div style="font-size:11px;color:#64748b;font-style:italic">Note: ${a.override.teacher_note}</div>` : ''}`;
 
-      const bg = isShort ? '#f8fafc' : a.isCorrect ? '#f0fdf4' : '#fef2f2';
+      const bg     = isCorrect ? '#f0fdf4' : '#fef2f2';
+      const border = isCorrect ? '#bbf7d0' : '#fecaca';
       return `
-        <div style="background:${bg};border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:10px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div style="display:flex;gap:8px;flex:1;">
               <span style="font-size:11px;font-weight:700;color:#94a3b8;flex-shrink:0;">Q${i + 1}</span>
               <span style="font-size:13px;color:#1e293b;">${a.stem}</span>
             </div>
-            ${!isShort ? `<span style="font-size:14px;font-weight:700;color:${iconColor};flex-shrink:0;">${icon}</span>` : ''}
+            <span style="font-size:14px;font-weight:700;color:${iconColor};flex-shrink:0;">${isCorrect ? '✓' : '✗'}</span>
           </div>
           ${answerHtml}
         </div>`;
@@ -212,24 +207,21 @@ function DetailModal({ submissionId, onClose }) {
 
       answers.forEach((a, i) => {
         const isShort    = a.type === 'short_answer';
+        const isCorrect  = a.isCorrect === true;
         const givenOpt   = a.options?.find(o => o.letter === a.given);
         const correctOpt = a.options?.find(o => o.letter === a.correct);
+        const givenText  = isShort ? (a.given || '—') : (givenOpt?.text || a.given || '—');
+        const correctText = isShort ? a.correct : (correctOpt?.text || a.correct);
+        const answerLabel = isShort ? 'Expected' : 'Correct';
         const stemLines  = doc.splitTextToSize(a.stem, CW - 14);
 
-        let extraLines = 0;
-        if (isShort) {
-          if (a.given) extraLines += doc.splitTextToSize(`Student: ${a.given}`, CW - 14).length;
-          if (a.correct) extraLines += 1;
-          if (a.override?.teacher_note) extraLines += 1;
-        } else {
-          extraLines += 1;
-          if (!a.isCorrect && a.correct) extraLines += 1;
-        }
+        let extraLines = 1; // student answer line
+        if (!isCorrect && a.correct) extraLines += 1;
+        if (isShort && a.override?.teacher_note) extraLines += 1;
         const boxH = 6 + stemLines.length * 4.5 + extraLines * 4.5 + 4;
         ensurePage(boxH + 3);
 
-        const [fr, fg, fb] = isShort ? [248,250,252] : a.isCorrect ? [240,253,244] : [254,242,242];
-        doc.setFillColor(fr, fg, fb);
+        doc.setFillColor(...(isCorrect ? [240,253,244] : [254,242,242]));
         doc.rect(ML, y, CW, boxH, 'F');
 
         doc.setFont('helvetica', 'bold');
@@ -237,12 +229,10 @@ function DetailModal({ submissionId, onClose }) {
         doc.setTextColor(160, 160, 160);
         doc.text(`Q${i + 1}`, ML + 2, y + 5);
 
-        if (!isShort) {
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(10);
-          doc.setTextColor(...(a.isCorrect ? [22,163,74] : [220,38,38]));
-          doc.text(a.isCorrect ? '✓' : '✗', PW - MR - 2, y + 5, { align: 'right' });
-        }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(...(isCorrect ? [22,163,74] : [220,38,38]));
+        doc.text(isCorrect ? '✓' : '✗', PW - MR - 2, y + 5, { align: 'right' });
 
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
@@ -250,36 +240,22 @@ function DetailModal({ submissionId, onClose }) {
         doc.text(stemLines, ML + 10, y + 5);
         y += 5 + stemLines.length * 4.5 + 1;
 
-        if (isShort) {
-          doc.setFontSize(8);
-          if (a.given) {
-            const ansLines = doc.splitTextToSize(`Student: ${a.given}`, CW - 14);
-            doc.setTextColor(71, 85, 105);
-            doc.text(ansLines, ML + 10, y);
-            y += ansLines.length * 4.5;
-          }
-          if (a.correct) {
-            doc.setTextColor(21, 128, 61);
-            doc.text(`Expected: ${a.correct}`, ML + 10, y);
-            y += 4.5;
-          }
-          if (a.override?.teacher_note) {
-            doc.setTextColor(120, 120, 120);
-            doc.setFont('helvetica', 'italic');
-            doc.text(`Note: ${a.override.teacher_note}`, ML + 10, y);
-            doc.setFont('helvetica', 'normal');
-            y += 4.5;
-          }
-        } else {
-          doc.setFontSize(8);
-          doc.setTextColor(...(a.isCorrect ? [21,128,61] : [185,28,28]));
-          doc.text(`Student: ${givenOpt?.text || a.given || '—'}`, ML + 10, y);
+        doc.setFontSize(8);
+        doc.setTextColor(...(isCorrect ? [21,128,61] : [185,28,28]));
+        doc.text(`Student: ${givenText}`, ML + 10, y);
+        y += 4.5;
+
+        if (!isCorrect && a.correct) {
+          doc.setTextColor(21, 128, 61);
+          doc.text(`${answerLabel}: ${correctText}`, ML + 10, y);
           y += 4.5;
-          if (!a.isCorrect && a.correct) {
-            doc.setTextColor(21, 128, 61);
-            doc.text(`Correct: ${correctOpt?.text || a.correct}`, ML + 10, y);
-            y += 4.5;
-          }
+        }
+        if (isShort && a.override?.teacher_note) {
+          doc.setTextColor(120, 120, 120);
+          doc.setFont('helvetica', 'italic');
+          doc.text(`Note: ${a.override.teacher_note}`, ML + 10, y);
+          doc.setFont('helvetica', 'normal');
+          y += 4.5;
         }
         y += 4;
       });
@@ -358,9 +334,15 @@ function DetailModal({ submissionId, onClose }) {
 
           {!loading && answers.map((a, i) => {
             const isShort    = a.type === 'short_answer';
+            const isCorrect  = a.isCorrect === true;
             const givenOpt   = a.options?.find(o => o.letter === a.given);
             const correctOpt = a.options?.find(o => o.letter === a.correct);
-            const bg = isShort ? 'border-slate-200' : a.isCorrect ? 'border-green-200 bg-green-50/40' : 'border-red-200 bg-red-50/40';
+            const givenText  = isShort ? (a.given || '—') : (givenOpt?.text || a.given || '—');
+            const correctText = isShort ? a.correct : (correctOpt?.text || a.correct);
+            const answerLabel = isShort ? 'Expected' : 'Correct';
+            const bg = isCorrect
+              ? 'border-green-200 bg-green-50/40'
+              : 'border-red-200 bg-red-50/40';
 
             return (
               <div key={a.questionId} className={`rounded-xl border p-4 space-y-2 ${bg}`}>
@@ -373,48 +355,32 @@ function DetailModal({ submissionId, onClose }) {
                 <div className="flex items-start gap-2">
                   <span className="text-xs font-bold text-slate-400 shrink-0 mt-0.5 w-5">Q{i + 1}</span>
                   <p className="text-sm text-slate-800 leading-snug flex-1">{a.stem}</p>
-                  {!isShort && (
-                    a.isCorrect
-                      ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                      : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-sm">✗</span>
+                  {isCorrect
+                    ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                    : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-sm">✗</span>
+                  }
+                </div>
+
+                {/* Answer pills — all question types */}
+                <div className="flex flex-wrap gap-2 pl-7 text-xs">
+                  <span className={`px-2 py-0.5 rounded-full font-medium ${isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    Student: {givenText}
+                  </span>
+                  {!isCorrect && a.correct && (
+                    <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                      {answerLabel}: {correctText}
+                    </span>
                   )}
                 </div>
 
-                {/* MCQ answer row */}
-                {!isShort && (
-                  <div className="flex flex-wrap gap-2 pl-7 text-xs">
-                    <span className={`px-2 py-0.5 rounded-full font-medium ${a.isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      Student: {givenOpt?.text || a.given || '—'}
+                {/* Override note (short answer only) */}
+                {isShort && a.override && (
+                  <div className="flex items-center gap-2 pl-7 text-xs">
+                    <span className={`px-2 py-0.5 rounded-full font-medium ${parseFloat(a.override.override_marks) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      {parseFloat(a.override.override_marks) > 0 ? '✓ Marked correct' : '✗ Marked incorrect'}
                     </span>
-                    {!a.isCorrect && a.correct && (
-                      <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
-                        Correct: {correctOpt?.text || a.correct}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Short answer */}
-                {isShort && (
-                  <div className="pl-7 space-y-1.5">
-                    <div className="bg-slate-100 rounded-lg px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap min-h-[32px]">
-                      {a.given || <span className="text-slate-400 italic">No answer given</span>}
-                    </div>
-                    {a.correct && (
-                      <div className="flex items-start gap-1.5 text-xs text-slate-500">
-                        <span className="font-medium shrink-0">Expected:</span>
-                        <span className="text-green-700 bg-green-50 rounded px-2 py-0.5">{a.correct}</span>
-                      </div>
-                    )}
-                    {a.override && (
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className={`px-2 py-0.5 rounded-full font-medium ${parseFloat(a.override.override_marks) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {parseFloat(a.override.override_marks) > 0 ? '✓ Marked correct' : '✗ Marked incorrect'}
-                        </span>
-                        {a.override.teacher_note && (
-                          <span className="text-slate-500 italic">{a.override.teacher_note}</span>
-                        )}
-                      </div>
+                    {a.override.teacher_note && (
+                      <span className="text-slate-500 italic">{a.override.teacher_note}</span>
                     )}
                   </div>
                 )}

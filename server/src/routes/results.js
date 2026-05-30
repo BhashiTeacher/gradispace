@@ -157,8 +157,9 @@ router.get('/export', requireAuth, requirePlan('pro', 'school'), async (req, res
         : 'N/A',
     }));
 
-    const now       = new Date();
-    const timestamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 12); // YYYYMMDDHHmm
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const timestamp = `${String(now.getFullYear()).slice(2)}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`; // YYMMDDHHMM
 
     if (format === 'csv') {
       const escape = v => {
@@ -169,7 +170,7 @@ router.get('/export', requireAuth, requirePlan('pro', 'school'), async (req, res
       const header = columns.map(c => c.header).join(',');
       const body   = dataRows.map(r => columns.map(c => escape(r[c.key])).join(',')).join('\n');
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${timestamp}_results.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${timestamp}_Results.csv"`);
       return res.end(`${header}\n${body}`);
     }
 
@@ -185,7 +186,7 @@ router.get('/export', requireAuth, requirePlan('pro', 'school'), async (req, res
 
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${timestamp}_results.xlsx"`);
+    res.setHeader('Content-Disposition', 'attachment; filename="' + timestamp + '_Results.xlsx"');
     res.setHeader('Content-Length', buffer.length);
     res.end(buffer);
   } catch (err) { next(err); }

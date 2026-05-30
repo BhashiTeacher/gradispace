@@ -10,7 +10,11 @@ router.get('/exam/:token', async (req, res, next) => {
       return res.status(404).json({ error: 'not_found', message: 'Exam not found or not published.' });
     }
     const { rows } = await db.query(
-      'SELECT e.*, t.name AS teacher_name FROM exams e JOIN teachers t ON t.id=e.teacher_id WHERE e.access_token=$1 AND e.published=true',
+      `SELECT e.*, t.name AS teacher_name,
+              t.portal_title, t.brand_colour, t.banner_image, t.profile_photo,
+              t.welcome_message, t.footer_message, t.locale, t.exam_display_mode
+       FROM exams e JOIN teachers t ON t.id=e.teacher_id
+       WHERE e.access_token=$1 AND e.published=true`,
       [req.params.token]
     );
     if (!rows[0]) return res.status(404).json({ error: 'not_found', message: 'Exam not found or not published.' });
@@ -48,6 +52,16 @@ router.get('/exam/:token', async (req, res, next) => {
       },
       questions,
       teacher: { name: exam.teacher_name },
+      branding: {
+        portalName:      exam.portal_title    || null,
+        brandColour:     exam.brand_colour    || '#4F46E5',
+        bannerImage:     exam.banner_image    || null,
+        profilePhoto:    exam.profile_photo   || null,
+        welcomeMessage:  exam.welcome_message || null,
+        footerMessage:   exam.footer_message  || null,
+        locale:          exam.locale          || 'en',
+        examDisplayMode: exam.exam_display_mode || 'paginated',
+      },
     });
   } catch (err) { next(err); }
 });
@@ -92,7 +106,13 @@ router.post('/exam/:token/submit', async (req, res, next) => {
     if (!sessionToken) return res.status(400).json({ error: 'validation_error', message: 'sessionToken is required.' });
 
     const { rows: sRows } = await db.query(
-      'SELECT s.*, e.id AS eid FROM submissions s JOIN exams e ON e.id=s.exam_id WHERE s.session_token=$1 AND e.access_token=$2',
+      `SELECT s.*, e.id AS eid,
+              t.portal_title, t.brand_colour, t.banner_image, t.profile_photo,
+              t.welcome_message, t.footer_message, t.locale, t.exam_display_mode
+       FROM submissions s
+       JOIN exams e ON e.id=s.exam_id
+       JOIN teachers t ON t.id=e.teacher_id
+       WHERE s.session_token=$1 AND e.access_token=$2`,
       [sessionToken, req.params.token]
     );
     if (!sRows[0]) return res.status(404).json({ error: 'not_found', message: 'Session not found.' });
@@ -147,7 +167,19 @@ router.post('/exam/:token/submit', async (req, res, next) => {
       WHERE session_token=$9
     `, [JSON.stringify(answers), correct, total, pct, grade, timeTaken, JSON.stringify(breakdown), requiresReview, sessionToken]);
 
-    res.json({ result: { correct, total, pct, grade, timeTaken, breakdown, answers: answerDetail, requiresReview } });
+    res.json({
+      result: { correct, total, pct, grade, timeTaken, breakdown, answers: answerDetail, requiresReview },
+      branding: {
+        portalName:      sub.portal_title    || null,
+        brandColour:     sub.brand_colour    || '#4F46E5',
+        bannerImage:     sub.banner_image    || null,
+        profilePhoto:    sub.profile_photo   || null,
+        welcomeMessage:  sub.welcome_message || null,
+        footerMessage:   sub.footer_message  || null,
+        locale:          sub.locale          || 'en',
+        examDisplayMode: sub.exam_display_mode || 'paginated',
+      },
+    });
   } catch (err) { next(err); }
 });
 

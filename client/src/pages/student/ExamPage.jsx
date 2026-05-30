@@ -357,7 +357,7 @@ export default function ExamPage() {
   }
 
   const unanswered = questions.filter(q => !answers[q.id]).length;
-  const paginated  = exam?.examDisplayMode !== 'scrollable';
+  const paginated  = branding?.examDisplayMode !== 'scrollable';
 
   // ── LOADING ──
   if (phase === 'loading') {

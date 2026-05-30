@@ -672,17 +672,17 @@ export default function ExamPage() {
         y += 5;
 
         questions.forEach((q, i) => {
-          const det = result.answers[q.id];
+          const det        = result.answers[q.id];
           if (!det) return;
-          const isShort   = q.type === 'short_answer';
-          const givenOpt  = q.options?.find(o => o.letter === det.given);
+          const isShort    = q.type === 'short_answer';
+          const isCorrect  = det.isCorrect === true;
+          const givenOpt   = q.options?.find(o => o.letter === det.given);
           const correctOpt = q.options?.find(o => o.letter === det.correct);
-          const stemLines = doc.splitTextToSize(q.stem, CW - 14);
-          const boxH = 6 + stemLines.length * 4.5 + (isShort && det.given ? 8 : 0) + (!isShort ? 8 : 0) + 3;
+          const stemLines  = doc.splitTextToSize(q.stem, CW - 14);
+          const boxH = 6 + stemLines.length * 4.5 + 8 + 3;
           ensurePage(boxH + 3);
 
-          const [fr, fg, fb] = isShort ? [248,250,252] : det.isCorrect ? [240,253,244] : [254,242,242];
-          doc.setFillColor(fr, fg, fb);
+          doc.setFillColor(...(isCorrect ? [240,253,244] : [254,242,242]));
           doc.rect(ML, y, CW, boxH, 'F');
 
           doc.setFont('helvetica', 'bold');
@@ -690,12 +690,10 @@ export default function ExamPage() {
           doc.setTextColor(160, 160, 160);
           doc.text(`Q${i + 1}`, ML + 2, y + 5);
 
-          if (!isShort) {
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(10);
-            doc.setTextColor(...(det.isCorrect ? [22,163,74] : [220,38,38]));
-            doc.text(det.isCorrect ? '✓' : '✗', PW - MR - 2, y + 5, { align: 'right' });
-          }
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10);
+          doc.setTextColor(...(isCorrect ? [22,163,74] : [220,38,38]));
+          doc.text(isCorrect ? '✓' : '✗', PW - MR - 2, y + 5, { align: 'right' });
 
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(9);
@@ -703,22 +701,19 @@ export default function ExamPage() {
           doc.text(stemLines, ML + 10, y + 5);
           y += 5 + stemLines.length * 4.5 + 1;
 
-          if (!isShort) {
-            doc.setFontSize(8);
-            doc.setTextColor(...(det.isCorrect ? [21,128,61] : [185,28,28]));
-            doc.text(`Your answer: ${givenOpt?.text || det.given || '—'}`, ML + 10, y);
+          doc.setFontSize(8);
+          const givenText = isShort
+            ? (det.given || '—')
+            : (givenOpt?.text || det.given || '—');
+          doc.setTextColor(...(isCorrect ? [21,128,61] : [185,28,28]));
+          doc.text(`Your answer: ${givenText}`, ML + 10, y);
+          y += 4;
+          if (!isCorrect && det.correct) {
+            doc.setTextColor(21, 128, 61);
+            const label = isShort ? 'Expected' : 'Correct';
+            const val   = isShort ? det.correct : (correctOpt?.text || det.correct);
+            doc.text(`${label}: ${val}`, ML + 10, y);
             y += 4;
-            if (!det.isCorrect && det.correct) {
-              doc.setTextColor(21, 128, 61);
-              doc.text(`Correct: ${correctOpt?.text || det.correct}`, ML + 10, y);
-              y += 4;
-            }
-          } else if (det.given) {
-            doc.setFontSize(8);
-            doc.setTextColor(80, 80, 80);
-            const ansLines = doc.splitTextToSize(`Your answer: ${det.given}`, CW - 14);
-            doc.text(ansLines, ML + 10, y);
-            y += ansLines.length * 4 + 1;
           }
           y += 5;
         });
@@ -812,39 +807,37 @@ export default function ExamPage() {
                 {questions.map((q, i) => {
                   const detail = result.answers[q.id];
                   if (!detail) return null;
-                  const isShort = q.type === 'short_answer';
+                  const isShort    = q.type === 'short_answer';
+                  // null means short-answer not auto-matched — treat as incorrect for display
+                  const isCorrect  = detail.isCorrect === true;
                   const givenOpt   = q.options?.find(o => o.letter === detail.given);
                   const correctOpt = q.options?.find(o => o.letter === detail.correct);
                   return (
                     <div key={q.id} className={`rounded-xl border p-3 space-y-2
-                      ${isShort ? 'border-slate-200' : detail.isCorrect ? 'border-green-200 bg-green-50/40' : 'border-red-200 bg-red-50/40'}`}>
+                      ${isCorrect ? 'border-green-200 bg-green-50/40' : 'border-red-200 bg-red-50/40'}`}>
                       <div className="flex items-start gap-2">
                         <span className="text-xs font-bold text-slate-400 shrink-0 mt-0.5">Q{i + 1}</span>
                         <p className="text-sm text-slate-800 leading-snug flex-1">{q.stem}</p>
-                        {!isShort && (
-                          detail.isCorrect
-                            ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                            : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-xs">✗</span>
+                        {isCorrect
+                          ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                          : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-xs">✗</span>
+                        }
+                      </div>
+                      <div className="flex flex-wrap gap-2 pl-5 text-xs">
+                        <span className={`px-2 py-0.5 rounded-full font-medium
+                          ${isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          Your answer: {isShort
+                            ? (detail.given || '—')
+                            : (givenOpt?.text || detail.given || '—')}
+                        </span>
+                        {!isCorrect && detail.correct && (
+                          <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                            {isShort ? 'Expected' : 'Correct'}: {isShort
+                              ? detail.correct
+                              : (correctOpt?.text || detail.correct)}
+                          </span>
                         )}
                       </div>
-                      {!isShort && (
-                        <div className="flex flex-wrap gap-2 pl-5 text-xs">
-                          <span className={`px-2 py-0.5 rounded-full font-medium
-                            ${detail.isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            Your answer: {givenOpt?.text || detail.given || '—'}
-                          </span>
-                          {!detail.isCorrect && detail.correct && (
-                            <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
-                              Correct: {correctOpt?.text || detail.correct}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {isShort && detail.given && (
-                        <p className="text-xs text-slate-600 bg-slate-100 rounded-lg px-2.5 py-1.5 pl-5 ml-5">
-                          {detail.given}
-                        </p>
-                      )}
                     </div>
                   );
                 })}

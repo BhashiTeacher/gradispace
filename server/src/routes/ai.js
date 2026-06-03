@@ -1,5 +1,6 @@
 const router = require('express').Router();
-const multer = require('multer');
+const multer    = require('multer');
+const pdfParse  = require('pdf-parse');
 const db     = require('../db');
 const { requireAuth }   = require('../middleware/auth');
 const { checkAiLimit }  = require('../middleware/plan');
@@ -96,12 +97,72 @@ For short_answer questions omit options and answer. No markdown, no explanation,
   } catch (err) { next(err); }
 });
 
-// POST /api/v1/ai/import-pdf
+// POST /api/v1/ai/import-pdf  (mode=generate → AI-generate questions; default → extract existing questions)
 router.post('/import-pdf', requireAuth, checkAiLimit, upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No PDF uploaded.' });
     if (req.file.size > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'PDF must be under 20 MB.' });
 
+    if (req.body.mode === 'generate') {
+      const { difficulty = 'medium', subject, topic, gradeLevel } = req.body;
+      const n         = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
+      const fromPage  = parseInt(req.body.fromPage) || null;
+      const toPage    = parseInt(req.body.toPage)   || null;
+
+      // Extract text page-by-page so we can slice to the requested range
+      const pageTexts = [];
+      const data = await pdfParse(req.file.buffer, {
+        pagerender(pageData) {
+          return pageData.getTextContent().then(tc => {
+            const text = tc.items.map(i => i.str).join(' ').trim();
+            pageTexts.push(text);
+            return text;
+          });
+        },
+      });
+
+      const totalPages = data.numpages;
+      const start      = fromPage ? Math.max(1, fromPage) - 1 : 0;
+      const end        = toPage   ? Math.min(totalPages, toPage) : totalPages;
+      const pageRange  = (fromPage || toPage) ? `pages ${fromPage || 1} to ${toPage || totalPages}` : 'the entire document';
+      const docText    = pageTexts.slice(start, end).join('\n\n');
+
+      if (!docText.trim()) {
+        return res.status(400).json({ error: 'validation_error', message: 'Could not extract text from the specified page range.' });
+      }
+
+      const system = `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.
+Generate exactly ${n} questions at ${difficulty} difficulty based on the provided document content.
+Return ONLY a valid JSON array:
+[{
+  "type": "mcq" | "short_answer",
+  "stem": "question text",
+  "options": [{"letter":"A","text":"..."},{"letter":"B","text":"..."},{"letter":"C","text":"..."},{"letter":"D","text":"..."}],
+  "answer": "A",
+  "part": "Part 1",
+  "partInstruction": "For each question, choose the correct answer.",
+  "subject": "${subject || ''}",
+  "gradeLevel": "${gradeLevel || ''}",
+  "topic": "${topic || ''}",
+  "difficulty": "${difficulty}"
+}]
+For short_answer questions omit options and answer. No markdown, no explanation, just the JSON array.`;
+
+      const aiRes = await callClaude([{
+        role: 'user',
+        content: `Generate ${n} exam questions from ${pageRange} of this document:\n\n${docText}${topic ? `\n\nFocus on the topic: ${topic}` : ''}`,
+      }], system);
+
+      const raw       = aiRes.content?.[0]?.text || '';
+      const questions = salvageJSON(raw);
+
+      await incrementAiUsage(req.teacherId);
+      const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
+      const used = rows[0]?.ai_usage_month || 0;
+      return res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
+    }
+
+    // Default: extract existing questions from the PDF (send document directly to Claude)
     const base64 = req.file.buffer.toString('base64');
     const system = `You are an expert at extracting exam questions from PDF documents.
 Extract all questions from the document and return ONLY a valid JSON array with this structure:
@@ -124,13 +185,12 @@ Preserve all stimulus/context boxes. No markdown. Just the JSON array.`;
       ]
     }], system);
 
-    const raw = aiRes.content?.[0]?.text || '';
+    const raw       = aiRes.content?.[0]?.text || '';
     const questions = salvageJSON(raw);
 
     await incrementAiUsage(req.teacherId);
     const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
     const used = rows[0]?.ai_usage_month || 0;
-
     res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
   } catch (err) { next(err); }
 });

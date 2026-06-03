@@ -399,7 +399,7 @@ export default function ExamBuilder() {
   const [mErrors, setMErrors]         = useState({});
 
   // ── AI tab state ──────────────────────────────────────────────────────────
-  const [aiMode, setAiMode]         = useState('text'); // 'text' | 'image'
+  const [aiMode, setAiMode]         = useState('text'); // 'text' | 'image' | 'pdf'
   const [aiPrompt, setAiPrompt]     = useState('');
   const [aiSubject, setAiSubject]   = useState('');
   const [aiCount, setAiCount]       = useState(10);
@@ -411,6 +411,11 @@ export default function ExamBuilder() {
   const aiImgInputRef               = useRef(null);
   const [aiImgFile, setAiImgFile]   = useState(null);
   const [aiImgName, setAiImgName]   = useState('');
+  const aiPdfInputRef               = useRef(null);
+  const [aiPdfFile, setAiPdfFile]   = useState(null);
+  const [aiPdfName, setAiPdfName]   = useState('');
+  const [aiFromPage, setAiFromPage] = useState(1);
+  const [aiToPage, setAiToPage]     = useState(10);
 
   // ── PDF tab state ─────────────────────────────────────────────────────────
   const pdfInputRef                     = useRef(null);
@@ -622,6 +627,40 @@ export default function ExamBuilder() {
       toast(`${normalized.length} questions generated.`, 'success');
     } catch (err) {
       toast(err.message || 'AI generation from image failed.', 'error');
+    } finally { setAiLoading(false); }
+  }
+
+  // ── AI: generate from PDF ────────────────────────────────────────────────
+  async function handleAiFromPdf() {
+    if (!aiPdfFile) { toast('Select a PDF file first.', 'error'); return; }
+    setAiLoading(true); setAiResults([]);
+    try {
+      const fd = new FormData();
+      fd.append('file', aiPdfFile);
+      fd.append('mode', 'generate');
+      fd.append('fromPage', aiFromPage || 1);
+      fd.append('toPage', aiToPage || 10);
+      fd.append('count', Math.min(Math.max(parseInt(aiCount) || 10, 1), 50));
+      fd.append('difficulty', aiDiff);
+      fd.append('subject', aiSubject || subject || '');
+      fd.append('topic', topic || '');
+      fd.append('gradeLevel', gradeLevel || '');
+      const { questions: qs } = await api.upload('/ai/import-pdf', fd);
+      const normalized = qs.map(q => ({
+        id: null, stem: q.stem,
+        options: q.options || toApiOptions(['', '', '', '']),
+        answer: q.answer || 'A',
+        type: q.type || 'mcq',
+        difficulty: q.difficulty || aiDiff,
+        subject: q.subject || aiSubject || subject,
+        topic: q.topic || topic,
+        _source: 'ai',
+      }));
+      setAiResults(normalized);
+      setAiSel(new Set(normalized.map((_, i) => i)));
+      toast(`${normalized.length} questions generated.`, 'success');
+    } catch (err) {
+      toast(err.message || 'AI generation from PDF failed.', 'error');
     } finally { setAiLoading(false); }
   }
 
@@ -1199,6 +1238,13 @@ export default function ExamBuilder() {
                       onClick={() => { if (!isPro) { navigate('/billing'); return; } setAiMode('image'); setAiResults([]); setAiSel(new Set()); }}>
                       From Image <ProBadge />
                     </label>
+                    <label
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 text-sm font-medium transition-colors cursor-pointer
+                        ${!isPro ? 'opacity-80' : ''}
+                        ${aiMode === 'pdf' ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                      onClick={() => { if (!isPro) { navigate('/billing'); return; } setAiMode('pdf'); setAiResults([]); setAiSel(new Set()); }}>
+                      From PDF <ProBadge />
+                    </label>
                   </div>
 
                   {/* Text prompt mode */}
@@ -1291,6 +1337,68 @@ export default function ExamBuilder() {
                         {aiLoading
                           ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
                           : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate from Image</>}
+                      </button>
+                    </>
+                  )}
+
+                  {/* From PDF mode (Pro) */}
+                  {aiMode === 'pdf' && (
+                    <>
+                      <div
+                        className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                        onClick={() => aiPdfInputRef.current?.click()}>
+                        <DocumentArrowUpIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                        {aiPdfName
+                          ? <p className="text-sm font-medium text-slate-700">{aiPdfName}</p>
+                          : <p className="text-sm text-slate-500">Drop a PDF or click to browse</p>}
+                        <p className="text-xs text-slate-400 mt-1">PDF · Max 20 MB</p>
+                        <input ref={aiPdfInputRef} type="file" accept=".pdf,application/pdf" className="hidden"
+                          onChange={e => {
+                            const f = e.target.files?.[0] || null;
+                            setAiPdfFile(f); setAiPdfName(f?.name || '');
+                            setAiResults([]); setAiSel(new Set());
+                          }} />
+                      </div>
+
+                      <div>
+                        <label className="label">Page range</label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-slate-500">From</span>
+                          <input className="input w-20 text-center" type="number" min="1"
+                            value={aiFromPage} onChange={e => setAiFromPage(e.target.value)} placeholder="1" />
+                          <span className="text-sm text-slate-500">To</span>
+                          <input className="input w-20 text-center" type="number" min="1"
+                            value={aiToPage} onChange={e => setAiToPage(e.target.value)} placeholder="10" />
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">Leave blank to use entire document</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="label">Count</label>
+                          <input className="input" type="number" min="1" max="50"
+                            value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="label">Difficulty</label>
+                          <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                            <option value="easy">Easy</option>
+                            <option value="medium">Medium</option>
+                            <option value="hard">Hard</option>
+                          </select>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="label">Subject override</label>
+                          <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
+                            placeholder={subject || 'Uses exam subject'} />
+                        </div>
+                      </div>
+
+                      <button onClick={handleAiFromPdf} disabled={aiLoading || !aiPdfFile}
+                        className="btn-primary w-full">
+                        {aiLoading
+                          ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
+                          : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate from PDF</>}
                       </button>
                     </>
                   )}

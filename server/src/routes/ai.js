@@ -109,25 +109,33 @@ router.post('/import-pdf', requireAuth, checkAiLimit, upload.single('file'), asy
       const fromPage  = parseInt(req.body.fromPage) || null;
       const toPage    = parseInt(req.body.toPage)   || null;
 
-      // Extract text page-by-page so we can slice to the requested range
-      const pageTexts = [];
+      // Use page-filtering renderer: return text only for pages in range,
+      // return '' for everything else. data.text is the concatenation of
+      // all return values, so this naturally slices to the requested range.
+      const effectiveFrom = fromPage || 1;
+      const effectiveTo   = toPage   || Infinity;
+      let currentPage = 0;
+
       const data = await pdfParse(req.file.buffer, {
         pagerender(pageData) {
-          return pageData.getTextContent().then(tc => {
-            const text = tc.items.map(i => i.str).join(' ').trim();
-            pageTexts.push(text);
-            return text;
-          });
+          currentPage++;
+          if (currentPage >= effectiveFrom && currentPage <= effectiveTo) {
+            return pageData.getTextContent().then(tc => tc.items.map(i => i.str).join(' '));
+          }
+          return Promise.resolve('');
         },
       });
 
-      const totalPages = data.numpages;
-      const start      = fromPage ? Math.max(1, fromPage) - 1 : 0;
-      const end        = toPage   ? Math.min(totalPages, toPage) : totalPages;
-      const pageRange  = (fromPage || toPage) ? `pages ${fromPage || 1} to ${toPage || totalPages}` : 'the entire document';
-      const docText    = pageTexts.slice(start, end).join('\n\n');
+      const docText   = data.text.trim();
+      const pageRange = (fromPage || toPage)
+        ? `pages ${fromPage || 1} to ${toPage || data.numpages}`
+        : 'the entire document';
 
-      if (!docText.trim()) {
+      console.log('[PDF] Total pages:', data.numpages);
+      console.log('[PDF] Requested range:', fromPage, 'to', toPage);
+      console.log('[PDF] Extracted text length:', docText.length);
+
+      if (!docText) {
         return res.status(400).json({ error: 'validation_error', message: 'Could not extract text from the specified page range.' });
       }
 

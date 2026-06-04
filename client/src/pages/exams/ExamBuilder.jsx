@@ -599,9 +599,9 @@ export default function ExamBuilder() {
     toast(`${sel.length} questions added to exam.`, 'success');
   }
 
-  // ── AI: generate from image ───────────────────────────────────────────────
+  // ── AI: generate from image (also handles PDFs sent as scanned) ──────────
   async function handleAiFromImage() {
-    if (!aiImgFile) { toast('Select an image first.', 'error'); return; }
+    if (!aiImgFile) { toast('Select an image or PDF first.', 'error'); return; }
     setAiLoading(true); setAiResults([]);
     try {
       const fd = new FormData();
@@ -1301,11 +1301,19 @@ export default function ExamBuilder() {
                         <SparklesIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
                         {aiImgName
                           ? <p className="text-sm font-medium text-slate-700">{aiImgName}</p>
-                          : <p className="text-sm text-slate-500">Drop an image or click to browse</p>}
-                        <p className="text-xs text-slate-400 mt-1">JPEG, PNG, WebP · Max 5 MB</p>
-                        <input ref={aiImgInputRef} type="file" accept="image/*" className="hidden"
+                          : <p className="text-sm text-slate-500">Drop an image or PDF, or click to browse</p>}
+                        <p className="text-xs text-slate-400 mt-1">JPEG, PNG, WebP · Max 5 MB &nbsp;|&nbsp; PDF · Max 10 MB · up to 5 pages</p>
+                        <input ref={aiImgInputRef} type="file" accept="image/*,application/pdf" className="hidden"
                           onChange={e => {
                             const f = e.target.files?.[0] || null;
+                            if (!f) return;
+                            const isPdf = f.type === 'application/pdf';
+                            const limit = isPdf ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
+                            if (f.size > limit) {
+                              toast(isPdf ? 'PDF must be under 10 MB.' : 'Image must be under 5 MB.', 'error');
+                              e.target.value = '';
+                              return;
+                            }
                             setAiImgFile(f); setAiImgName(f?.name || '');
                             setAiResults([]); setAiSel(new Set());
                           }} />
@@ -1378,6 +1386,10 @@ export default function ExamBuilder() {
                         <p className="text-xs text-slate-400 mt-1">Leave blank to use entire document</p>
                       </div>
 
+                      <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        Scanned PDFs are processed up to 5 pages at a time using AI vision — this may take 30–60 seconds.
+                      </p>
+
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <div>
                           <label className="label">Count</label>
@@ -1402,7 +1414,7 @@ export default function ExamBuilder() {
                       <button onClick={handleAiFromPdf} disabled={aiLoading || !aiPdfFile}
                         className="btn-primary w-full">
                         {aiLoading
-                          ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
+                          ? <><Spinner className="w-4 h-4 mr-2" /> Reading pages with AI vision…</>
                           : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate from PDF</>}
                       </button>
                     </>

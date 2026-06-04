@@ -68,6 +68,13 @@ app.use('/api', (_req, res) => {
 
 // ── Global error handler ─────────────────────────────────────────
 app.use((err, _req, res, _next) => {
+  // Multer file-size rejection
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      error: 'file_too_large',
+      message: 'PDF must be under 20MB. For large documents, upload specific pages or chapters only.',
+    });
+  }
   console.error(err);
   const status = err.status || 500;
   res.status(status).json({

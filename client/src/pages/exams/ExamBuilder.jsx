@@ -1355,6 +1355,11 @@ export default function ExamBuilder() {
                         <input ref={aiPdfInputRef} type="file" accept=".pdf,application/pdf" className="hidden"
                           onChange={e => {
                             const f = e.target.files?.[0] || null;
+                            if (f && f.size > 20 * 1024 * 1024) {
+                              toast('PDF must be under 20 MB. Upload specific pages or chapters only.', 'error');
+                              e.target.value = '';
+                              return;
+                            }
                             setAiPdfFile(f); setAiPdfName(f?.name || '');
                             setAiResults([]); setAiSel(new Set());
                           }} />
@@ -1458,7 +1463,13 @@ export default function ExamBuilder() {
                       <input ref={pdfInputRef} type="file" accept=".pdf,application/pdf"
                         className="hidden"
                         onChange={e => {
-                          setPdfFileName(e.target.files?.[0]?.name || '');
+                          const f = e.target.files?.[0];
+                          if (f && f.size > 20 * 1024 * 1024) {
+                            toast('PDF must be under 20 MB.', 'error');
+                            e.target.value = '';
+                            return;
+                          }
+                          setPdfFileName(f?.name || '');
                           setPdfResults([]); setPdfSel(new Set());
                         }} />
                     </div>

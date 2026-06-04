@@ -103,40 +103,45 @@ router.post('/import-pdf', requireAuth, checkAiLimit, upload.single('file'), asy
     if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No PDF uploaded.' });
     if (req.file.size > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'PDF must be under 20 MB.' });
 
+    console.log('[PDF Import] body keys:', Object.keys(req.body));
+    console.log('[PDF Import] file:', req.file?.originalname, req.file?.size);
+    console.log('[PDF Import] fromPage:', req.body.fromPage, 'toPage:', req.body.toPage);
+
     if (req.body.mode === 'generate') {
       const { difficulty = 'medium', subject, topic, gradeLevel } = req.body;
-      const n         = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
-      const fromPage  = parseInt(req.body.fromPage) || null;
-      const toPage    = parseInt(req.body.toPage)   || null;
+      const n           = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
+      const fromPage    = parseInt(req.body.fromPage) || 1;
+      const toPage      = parseInt(req.body.toPage)   || 999;
 
-      // Use page-filtering renderer: return text only for pages in range,
-      // return '' for everything else. data.text is the concatenation of
-      // all return values, so this naturally slices to the requested range.
-      const effectiveFrom = fromPage || 1;
-      const effectiveTo   = toPage   || Infinity;
+      // pagerender callback: return text for pages in range, '' otherwise.
+      // data.text in pdf-parse@1.1.1 is the concatenation of all return values.
       let currentPage = 0;
-
       const data = await pdfParse(req.file.buffer, {
         pagerender(pageData) {
           currentPage++;
-          if (currentPage >= effectiveFrom && currentPage <= effectiveTo) {
+          if (currentPage >= fromPage && currentPage <= toPage) {
             return pageData.getTextContent().then(tc => tc.items.map(i => i.str).join(' '));
           }
           return Promise.resolve('');
         },
       });
 
-      const docText   = data.text.trim();
-      const pageRange = (fromPage || toPage)
-        ? `pages ${fromPage || 1} to ${toPage || data.numpages}`
-        : 'the entire document';
-
       console.log('[PDF] Total pages:', data.numpages);
       console.log('[PDF] Requested range:', fromPage, 'to', toPage);
-      console.log('[PDF] Extracted text length:', docText.length);
+      console.log('[PDF] pagerender text length:', data.text.trim().length);
+
+      // Fallback: if pagerender yielded nothing, split full text by form-feed chars
+      let docText = data.text.trim();
+      if (!docText) {
+        const pages = data.text.split('\f');
+        docText = pages.slice(fromPage - 1, toPage).join('\n').trim() || data.text.trim();
+        console.log('[PDF] Fallback \\f split used, pages found:', pages.length, 'docText length:', docText.length);
+      }
+
+      const pageRange = `pages ${fromPage} to ${Math.min(toPage, data.numpages)}`;
 
       if (!docText) {
-        return res.status(400).json({ error: 'validation_error', message: 'Could not extract text from the specified page range.' });
+        return res.status(400).json({ error: 'validation_error', message: 'Could not extract text from this PDF. It may be a scanned image — try the Image mode instead.' });
       }
 
       const system = `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.

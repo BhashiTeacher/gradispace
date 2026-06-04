@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
-  HomeIcon, PencilSquareIcon, CircleStackIcon, UsersIcon,
+  HomeIcon, PencilSquareIcon, CircleStackIcon,
   ChartBarIcon, CreditCardIcon, Cog6ToothIcon, Bars3Icon,
   XMarkIcon, ArrowRightOnRectangleIcon, SparklesIcon,
 } from '@heroicons/react/24/outline';
@@ -12,7 +12,6 @@ const navItems = [
   { to: '/dashboard',   label: 'Dashboard',     icon: HomeIcon },
   { to: '/exams/new',   label: 'New Exam',       icon: PencilSquareIcon },
   { to: '/questions',   label: 'Question Bank',  icon: CircleStackIcon },
-  { to: '/classrooms',  label: 'Classrooms',     icon: UsersIcon,    pro: true },
   { to: '/results',     label: 'Results',        icon: ChartBarIcon },
 ];
 

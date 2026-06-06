@@ -23,6 +23,13 @@ const toApiOptions = (texts, imgUrls = []) =>
     ...(imgUrls[i]?.trim() ? { imageUrl: imgUrls[i].trim() } : {}),
   }));
 
+const fmtSize = bytes =>
+  bytes < 1024 * 1024 ? (bytes / 1024).toFixed(1) + ' KB' : (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+
+const MAX_IMG_EACH  = 2  * 1024 * 1024;   // 2 MB per image
+const MAX_IMG_TOTAL = 10 * 1024 * 1024;   // 10 MB total images
+const MAX_PDF_TOTAL = 20 * 1024 * 1024;   // 20 MB total PDFs
+
 // ─── Small presentational components ─────────────────────────────────────────
 
 function SourceBadge({ source }) {
@@ -408,14 +415,18 @@ export default function ExamBuilder() {
   const [aiLoading, setAiLoading]   = useState(false);
   const [aiResults, setAiResults]   = useState([]);
   const [aiSel, setAiSel]           = useState(new Set());
-  const aiImgInputRef               = useRef(null);
-  const [aiImgFile, setAiImgFile]   = useState(null);
-  const [aiImgName, setAiImgName]   = useState('');
-  const aiPdfInputRef               = useRef(null);
-  const [aiPdfFile, setAiPdfFile]   = useState(null);
-  const [aiPdfName, setAiPdfName]   = useState('');
-  const [aiFromPage, setAiFromPage] = useState(1);
-  const [aiToPage, setAiToPage]     = useState(10);
+  const aiImgInputRef                   = useRef(null);
+  const [aiImgFiles, setAiImgFiles]     = useState([]);       // File[]
+  const [aiImgPreviews, setAiImgPreviews] = useState([]);     // object URL[]
+  const aiPdfInputRef                   = useRef(null);
+  const [aiPdfFiles, setAiPdfFiles]     = useState([]);       // { file, fromPage, toPage }[]
+
+  // Create / revoke thumbnail object URLs when image selection changes
+  useEffect(() => {
+    const urls = aiImgFiles.filter(f => f.type !== 'application/pdf').map(f => URL.createObjectURL(f));
+    setAiImgPreviews(urls);
+    return () => urls.forEach(u => URL.revokeObjectURL(u));
+  }, [aiImgFiles]);
 
   // ── PDF tab state ─────────────────────────────────────────────────────────
   const pdfInputRef                     = useRef(null);
@@ -599,13 +610,15 @@ export default function ExamBuilder() {
     toast(`${sel.length} questions added to exam.`, 'success');
   }
 
-  // ── AI: generate from image (also handles PDFs sent as scanned) ──────────
+  // ── AI: generate from images (multiple) ──────────────────────────────────
   async function handleAiFromImage() {
-    if (!aiImgFile) { toast('Select an image or PDF first.', 'error'); return; }
+    if (!aiImgFiles.length) { toast('Select at least one image.', 'error'); return; }
+    const totalSize = aiImgFiles.reduce((s, f) => s + f.size, 0);
+    if (totalSize > MAX_IMG_TOTAL) { toast('Total size exceeds 10 MB. Remove some images.', 'error'); return; }
     setAiLoading(true); setAiResults([]);
     try {
       const fd = new FormData();
-      fd.append('file', aiImgFile);
+      aiImgFiles.forEach(f => fd.append('images', f));
       fd.append('count', Math.min(Math.max(parseInt(aiCount) || 10, 1), 50));
       fd.append('difficulty', aiDiff);
       fd.append('subject', aiSubject || subject || '');
@@ -624,22 +637,24 @@ export default function ExamBuilder() {
       }));
       setAiResults(normalized);
       setAiSel(new Set(normalized.map((_, i) => i)));
-      toast(`${normalized.length} questions generated.`, 'success');
+      toast(`${normalized.length} questions generated from ${aiImgFiles.length} image(s).`, 'success');
     } catch (err) {
-      toast(err.message || 'AI generation from image failed.', 'error');
+      toast(err.message || 'AI generation from images failed.', 'error');
     } finally { setAiLoading(false); }
   }
 
-  // ── AI: generate from PDF ────────────────────────────────────────────────
+  // ── AI: generate from PDFs (multiple, per-file page ranges) ──────────────
   async function handleAiFromPdf() {
-    if (!aiPdfFile) { toast('Select a PDF file first.', 'error'); return; }
+    if (!aiPdfFiles.length) { toast('Select at least one PDF.', 'error'); return; }
+    const totalSize = aiPdfFiles.reduce((s, { file }) => s + file.size, 0);
+    if (totalSize > MAX_PDF_TOTAL) { toast('Total PDF size exceeds 20 MB.', 'error'); return; }
     setAiLoading(true); setAiResults([]);
     try {
       const fd = new FormData();
-      fd.append('file', aiPdfFile);
+      aiPdfFiles.forEach(({ file }) => fd.append('pdfs', file));
       fd.append('mode', 'generate');
-      fd.append('fromPage', aiFromPage || 1);
-      fd.append('toPage', aiToPage || 10);
+      fd.append('fromPages', JSON.stringify(aiPdfFiles.map(({ fromPage }) => parseInt(fromPage) || 1)));
+      fd.append('toPages',   JSON.stringify(aiPdfFiles.map(({ toPage })   => parseInt(toPage)   || 999)));
       fd.append('count', Math.min(Math.max(parseInt(aiCount) || 10, 1), 50));
       fd.append('difficulty', aiDiff);
       fd.append('subject', aiSubject || subject || '');
@@ -658,9 +673,9 @@ export default function ExamBuilder() {
       }));
       setAiResults(normalized);
       setAiSel(new Set(normalized.map((_, i) => i)));
-      toast(`${normalized.length} questions generated.`, 'success');
+      toast(`${normalized.length} questions generated from ${aiPdfFiles.length} PDF(s).`, 'success');
     } catch (err) {
-      toast(err.message || 'AI generation from PDF failed.', 'error');
+      toast(err.message || 'AI generation from PDFs failed.', 'error');
     } finally { setAiLoading(false); }
   }
 
@@ -1293,132 +1308,189 @@ export default function ExamBuilder() {
                   )}
 
                   {/* From image mode (Pro) */}
-                  {aiMode === 'image' && (
-                    <>
-                      <div
-                        className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-primary-400 transition-colors cursor-pointer"
-                        onClick={() => aiImgInputRef.current?.click()}>
-                        <SparklesIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                        {aiImgName
-                          ? <p className="text-sm font-medium text-slate-700">{aiImgName}</p>
-                          : <p className="text-sm text-slate-500">Drop an image or PDF, or click to browse</p>}
-                        <p className="text-xs text-slate-400 mt-1">JPEG, PNG, WebP · Max 5 MB &nbsp;|&nbsp; PDF · Max 10 MB · up to 5 pages</p>
-                        <input ref={aiImgInputRef} type="file" accept="image/*,application/pdf" className="hidden"
-                          onChange={e => {
-                            const f = e.target.files?.[0] || null;
-                            if (!f) return;
-                            const isPdf = f.type === 'application/pdf';
-                            const limit = isPdf ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
-                            if (f.size > limit) {
-                              toast(isPdf ? 'PDF must be under 10 MB.' : 'Image must be under 5 MB.', 'error');
-                              e.target.value = '';
-                              return;
-                            }
-                            setAiImgFile(f); setAiImgName(f?.name || '');
-                            setAiResults([]); setAiSel(new Set());
-                          }} />
-                      </div>
+                  {aiMode === 'image' && (() => {
+                    const totalImgSize = aiImgFiles.reduce((s, f) => s + f.size, 0);
+                    const overLimit    = totalImgSize > MAX_IMG_TOTAL;
+                    const addFiles = newFiles => {
+                      const bad = newFiles.find(f => f.size > MAX_IMG_EACH);
+                      if (bad) { toast(`${bad.name}: images must be under 2 MB each.`, 'error'); return; }
+                      const combined = [...aiImgFiles, ...newFiles].slice(0, 10);
+                      setAiImgFiles(combined); setAiResults([]); setAiSel(new Set());
+                    };
+                    return (
+                      <>
+                        <div
+                          className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                          onClick={() => aiImgInputRef.current?.click()}
+                          onDragOver={e => e.preventDefault()}
+                          onDrop={e => { e.preventDefault(); addFiles(Array.from(e.dataTransfer.files)); }}>
+                          <SparklesIcon className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                          <p className="text-sm text-slate-500">Drop images or click to browse</p>
+                          <p className="text-xs text-slate-400 mt-1">Up to 10 images · Max 2 MB each · 10 MB total</p>
+                          <input ref={aiImgInputRef} type="file" accept=".jpg,.jpeg,.png,.webp" multiple className="hidden"
+                            onChange={e => { addFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
+                        </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <div>
-                          <label className="label">Count</label>
-                          <input className="input" type="number" min="1" max="50"
-                            value={aiCount} onChange={e => setAiCount(e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="label">Difficulty</label>
-                          <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
-                            <option value="easy">Easy</option>
-                            <option value="medium">Medium</option>
-                            <option value="hard">Hard</option>
-                          </select>
-                        </div>
-                        <div className="sm:col-span-2">
-                          <label className="label">Subject override</label>
-                          <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
-                            placeholder={subject || 'Uses exam subject'} />
-                        </div>
-                      </div>
+                        {aiImgFiles.length > 0 && (
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm text-slate-600">
+                                {aiImgFiles.length} image{aiImgFiles.length > 1 ? 's' : ''} · {fmtSize(totalImgSize)} / 10 MB
+                              </span>
+                              <button onClick={() => { setAiImgFiles([]); if (aiImgInputRef.current) aiImgInputRef.current.value = ''; }}
+                                className="text-xs text-slate-400 hover:text-red-500 transition-colors">Clear all</button>
+                            </div>
+                            <div className="grid grid-cols-5 gap-2">
+                              {aiImgFiles.map((f, i) => (
+                                <div key={i} className="relative group">
+                                  <img src={aiImgPreviews[i]} alt={f.name}
+                                    className="w-full h-16 object-cover rounded border border-slate-200" />
+                                  <p className="text-xs text-slate-400 truncate mt-0.5">{f.name}</p>
+                                  <button
+                                    onClick={() => setAiImgFiles(prev => prev.filter((_, j) => j !== i))}
+                                    className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center leading-none">
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            {overLimit && <p className="text-xs text-red-500 mt-1.5">Total size exceeds 10 MB — please remove some images.</p>}
+                          </div>
+                        )}
 
-                      <button onClick={handleAiFromImage} disabled={aiLoading || !aiImgFile}
-                        className="btn-primary w-full">
-                        {aiLoading
-                          ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
-                          : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate from Image</>}
-                      </button>
-                    </>
-                  )}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <div>
+                            <label className="label">Count</label>
+                            <input className="input" type="number" min="1" max="50"
+                              value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="label">Difficulty</label>
+                            <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                              <option value="easy">Easy</option>
+                              <option value="medium">Medium</option>
+                              <option value="hard">Hard</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="label">Subject override</label>
+                            <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
+                              placeholder={subject || 'Uses exam subject'} />
+                          </div>
+                        </div>
+
+                        <button onClick={handleAiFromImage}
+                          disabled={aiLoading || !aiImgFiles.length || overLimit}
+                          className="btn-primary w-full">
+                          {aiLoading
+                            ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
+                            : <><SparklesIcon className="w-4 h-4 mr-1.5" />
+                                {aiImgFiles.length
+                                  ? `Generate from ${aiImgFiles.length} Image${aiImgFiles.length > 1 ? 's' : ''}`
+                                  : 'Generate from Images'}</>}
+                        </button>
+                      </>
+                    );
+                  })()}
 
                   {/* From PDF mode (Pro) */}
-                  {aiMode === 'pdf' && (
-                    <>
-                      <div
-                        className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-primary-400 transition-colors cursor-pointer"
-                        onClick={() => aiPdfInputRef.current?.click()}>
-                        <DocumentArrowUpIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                        {aiPdfName
-                          ? <p className="text-sm font-medium text-slate-700">{aiPdfName}</p>
-                          : <p className="text-sm text-slate-500">Drop a PDF or click to browse</p>}
-                        <p className="text-xs text-slate-400 mt-1">PDF · Max 20 MB</p>
-                        <input ref={aiPdfInputRef} type="file" accept=".pdf,application/pdf" className="hidden"
-                          onChange={e => {
-                            const f = e.target.files?.[0] || null;
-                            if (f && f.size > 20 * 1024 * 1024) {
-                              toast('PDF must be under 20 MB. Upload specific pages or chapters only.', 'error');
-                              e.target.value = '';
-                              return;
-                            }
-                            setAiPdfFile(f); setAiPdfName(f?.name || '');
-                            setAiResults([]); setAiSel(new Set());
-                          }} />
-                      </div>
-
-                      <div>
-                        <label className="label">Page range</label>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-slate-500">From</span>
-                          <input className="input w-20 text-center" type="number" min="1"
-                            value={aiFromPage} onChange={e => setAiFromPage(e.target.value)} placeholder="1" />
-                          <span className="text-sm text-slate-500">To</span>
-                          <input className="input w-20 text-center" type="number" min="1"
-                            value={aiToPage} onChange={e => setAiToPage(e.target.value)} placeholder="10" />
+                  {aiMode === 'pdf' && (() => {
+                    const totalPdfSize = aiPdfFiles.reduce((s, { file }) => s + file.size, 0);
+                    const overLimit    = totalPdfSize > MAX_PDF_TOTAL;
+                    const addPdfs = newFiles => {
+                      const bad = newFiles.find(f => f.size > MAX_PDF_TOTAL);
+                      if (bad) { toast(`${bad.name} is too large. Max 20 MB per PDF.`, 'error'); return; }
+                      const combined = [...aiPdfFiles, ...newFiles.map(f => ({ file: f, fromPage: 1, toPage: 10 }))].slice(0, 3);
+                      setAiPdfFiles(combined); setAiResults([]); setAiSel(new Set());
+                    };
+                    return (
+                      <>
+                        <div
+                          className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                          onClick={() => aiPdfInputRef.current?.click()}
+                          onDragOver={e => e.preventDefault()}
+                          onDrop={e => { e.preventDefault(); addPdfs(Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf')); }}>
+                          <DocumentArrowUpIcon className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                          <p className="text-sm text-slate-500">Drop PDFs or click to browse</p>
+                          <p className="text-xs text-slate-400 mt-1">Up to 3 PDFs · 20 MB total</p>
+                          <input ref={aiPdfInputRef} type="file" accept=".pdf,application/pdf" multiple className="hidden"
+                            onChange={e => { addPdfs(Array.from(e.target.files || [])); e.target.value = ''; }} />
                         </div>
-                        <p className="text-xs text-slate-400 mt-1">Leave blank to use entire document</p>
-                      </div>
 
-                      <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                        Scanned PDFs are processed up to 5 pages at a time using AI vision — this may take 30–60 seconds.
-                      </p>
+                        {aiPdfFiles.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-slate-600">
+                                {aiPdfFiles.length} PDF{aiPdfFiles.length > 1 ? 's' : ''} · {fmtSize(totalPdfSize)} / 20 MB
+                              </span>
+                              <button onClick={() => { setAiPdfFiles([]); if (aiPdfInputRef.current) aiPdfInputRef.current.value = ''; }}
+                                className="text-xs text-slate-400 hover:text-red-500 transition-colors">Clear all</button>
+                            </div>
+                            {aiPdfFiles.map(({ file, fromPage, toPage }, i) => (
+                              <div key={i} className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50">
+                                <DocumentArrowUpIcon className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-medium text-slate-700 truncate">{file.name}</p>
+                                  <p className="text-xs text-slate-400">{fmtSize(file.size)}</p>
+                                </div>
+                                <div className="flex items-center gap-1 text-xs text-slate-500 flex-shrink-0">
+                                  <span>Pages</span>
+                                  <input type="number" min="1" value={fromPage}
+                                    onChange={e => setAiPdfFiles(prev => prev.map((it, j) => j === i ? { ...it, fromPage: e.target.value } : it))}
+                                    className="input w-14 text-center px-1 py-0.5 text-xs" />
+                                  <span>–</span>
+                                  <input type="number" min="1" value={toPage}
+                                    onChange={e => setAiPdfFiles(prev => prev.map((it, j) => j === i ? { ...it, toPage: e.target.value } : it))}
+                                    className="input w-14 text-center px-1 py-0.5 text-xs" />
+                                </div>
+                                <button onClick={() => setAiPdfFiles(prev => prev.filter((_, j) => j !== i))}
+                                  className="text-slate-400 hover:text-red-500 transition-colors flex-shrink-0">
+                                  <XMarkIcon className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ))}
+                            {overLimit && <p className="text-xs text-red-500">Total size exceeds 20 MB.</p>}
+                          </div>
+                        )}
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <div>
-                          <label className="label">Count</label>
-                          <input className="input" type="number" min="1" max="50"
-                            value={aiCount} onChange={e => setAiCount(e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="label">Difficulty</label>
-                          <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
-                            <option value="easy">Easy</option>
-                            <option value="medium">Medium</option>
-                            <option value="hard">Hard</option>
-                          </select>
-                        </div>
-                        <div className="sm:col-span-2">
-                          <label className="label">Subject override</label>
-                          <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
-                            placeholder={subject || 'Uses exam subject'} />
-                        </div>
-                      </div>
+                        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          Scanned PDFs are processed up to 5 pages at a time using AI vision — this may take 30–60 seconds.
+                        </p>
 
-                      <button onClick={handleAiFromPdf} disabled={aiLoading || !aiPdfFile}
-                        className="btn-primary w-full">
-                        {aiLoading
-                          ? <><Spinner className="w-4 h-4 mr-2" /> Reading pages with AI vision…</>
-                          : <><SparklesIcon className="w-4 h-4 mr-1.5" /> Generate from PDF</>}
-                      </button>
-                    </>
-                  )}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <div>
+                            <label className="label">Count</label>
+                            <input className="input" type="number" min="1" max="50"
+                              value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="label">Difficulty</label>
+                            <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                              <option value="easy">Easy</option>
+                              <option value="medium">Medium</option>
+                              <option value="hard">Hard</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="label">Subject override</label>
+                            <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
+                              placeholder={subject || 'Uses exam subject'} />
+                          </div>
+                        </div>
+
+                        <button onClick={handleAiFromPdf}
+                          disabled={aiLoading || !aiPdfFiles.length || overLimit}
+                          className="btn-primary w-full">
+                          {aiLoading
+                            ? <><Spinner className="w-4 h-4 mr-2" /> Reading pages with AI vision…</>
+                            : <><SparklesIcon className="w-4 h-4 mr-1.5" />
+                                {aiPdfFiles.length
+                                  ? `Generate from ${aiPdfFiles.length} PDF${aiPdfFiles.length > 1 ? 's' : ''}`
+                                  : 'Generate from PDF'}</>}
+                        </button>
+                      </>
+                    );
+                  })()}
 
                   {/* Shared results section */}
                   {aiResults.length > 0 && (

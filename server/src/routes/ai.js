@@ -5,6 +5,7 @@ const db        = require('../db');
 const { requireAuth }  = require('../middleware/auth');
 const { checkAiLimit } = require('../middleware/plan');
 
+// Single multer instance; per-endpoint limits validated in handlers
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 // ── Claude API ────────────────────────────────────────────────────────────────
@@ -79,11 +80,10 @@ For short_answer questions omit options and answer. No markdown, no explanation,
 }
 
 // ── Scanned PDF helper ────────────────────────────────────────────────────────
-// Converts up to 5 pages to PNG images via pdf2pic (needs ImageMagick + Ghostscript),
-// then sends them to Claude Vision. Falls back to Claude's native PDF document API
-// if the conversion fails (e.g. system binaries not available).
+// Converts up to 5 pages to PNG via pdf2pic (needs ImageMagick+Ghostscript).
+// Falls back to Claude's native document API if conversion fails.
 async function generateFromScannedPdf({ buffer, fromPage, toPage, totalPages, n, difficulty, subject, topic, gradeLevel }) {
-  const effectiveTo = Math.min(toPage, totalPages, fromPage + 4); // cap at 5 pages
+  const effectiveTo = Math.min(toPage, totalPages, fromPage + 4);
   const pageLabel   = `pages ${fromPage}–${effectiveTo}`;
   const system      = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel);
 
@@ -108,8 +108,7 @@ async function generateFromScannedPdf({ buffer, fromPage, toPage, totalPages, n,
     }], system);
     return aiRes.content?.[0]?.text || '';
   } catch (convErr) {
-    // Claude's document API handles both text and scanned PDFs natively
-    console.log('[PDF] pdf2pic unavailable:', convErr.message, '→ Claude document API fallback');
+    console.log('[PDF] pdf2pic unavailable:', convErr.message, '→ Claude document API');
     const base64 = buffer.toString('base64');
     const aiRes = await callClaude([{
       role: 'user',
@@ -158,78 +157,103 @@ For short_answer questions omit options and answer. No markdown, no explanation,
 });
 
 // ── POST /api/v1/ai/import-pdf ────────────────────────────────────────────────
-// mode=generate → detect scanned vs text, generate N questions
-// (no mode)     → extract existing questions from the PDF
-router.post('/import-pdf', requireAuth, checkAiLimit, upload.single('file'), async (req, res, next) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No PDF uploaded.' });
-    if (req.file.size > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'PDF must be under 20 MB.' });
+// mode=generate → one or more PDFs with per-file page ranges → generate N questions
+// (no mode)     → single PDF → extract existing questions
+router.post(
+  '/import-pdf',
+  requireAuth,
+  checkAiLimit,
+  upload.fields([{ name: 'file', maxCount: 1 }, { name: 'pdfs', maxCount: 3 }]),
+  async (req, res, next) => {
+    try {
+      console.log('[PDF Import] mode:', req.body.mode, '| fields:', Object.keys(req.files || {}));
 
-    console.log('[PDF Import] file:', req.file.originalname, req.file.size, '| mode:', req.body.mode);
-    console.log('[PDF Import] fromPage:', req.body.fromPage, 'toPage:', req.body.toPage);
+      if (req.body.mode === 'generate') {
+        // Support both old single-file ('file') and new multi-file ('pdfs') clients
+        const pdfFiles = req.files?.pdfs || req.files?.file || [];
+        if (!pdfFiles.length) return res.status(400).json({ error: 'validation_error', message: 'No PDFs uploaded.' });
 
-    if (req.body.mode === 'generate') {
-      const { difficulty = 'medium', subject, topic, gradeLevel } = req.body;
-      const n        = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
-      const fromPage = parseInt(req.body.fromPage) || 1;
-      const toPage   = parseInt(req.body.toPage)   || 999;
+        const totalSize = pdfFiles.reduce((s, f) => s + f.size, 0);
+        if (totalSize > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'Total PDF size must be under 20 MB.' });
 
-      // Detect scanned vs text PDF
-      const textScan  = await pdfParse(req.file.buffer);
-      const isScanned = !textScan.text || textScan.text.trim().length < 100;
-      console.log('[PDF] Total pages:', textScan.numpages, '| Scanned:', isScanned, '| Text len:', textScan.text?.trim().length ?? 0);
+        const { difficulty = 'medium', subject, topic, gradeLevel } = req.body;
+        const n         = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
+        const fromPages = req.body.fromPages ? JSON.parse(req.body.fromPages) : [parseInt(req.body.fromPage) || 1];
+        const toPages   = req.body.toPages   ? JSON.parse(req.body.toPages)   : [parseInt(req.body.toPage)   || 999];
 
-      let raw;
-      if (isScanned) {
-        console.log('[PDF] Scanned PDF detected — switching to vision mode');
-        raw = await generateFromScannedPdf({
-          buffer: req.file.buffer,
-          fromPage, toPage, totalPages: textScan.numpages,
-          n, difficulty, subject, topic, gradeLevel,
-        });
-      } else {
-        // Text PDF — pagerender range slice with \f fallback
-        let currentPage = 0;
-        const data = await pdfParse(req.file.buffer, {
-          pagerender(pageData) {
-            currentPage++;
-            if (currentPage >= fromPage && currentPage <= toPage) {
-              return pageData.getTextContent().then(tc => tc.items.map(i => i.str).join(' '));
+        console.log('[PDF Import] files:', pdfFiles.map(f => f.originalname), '| pages:', fromPages, '-', toPages);
+
+        // Build combined Claude content from all PDFs
+        const contentItems = [];
+        const textSections = [];
+
+        for (let i = 0; i < pdfFiles.length; i++) {
+          const pdfFile  = pdfFiles[i];
+          const fp       = parseInt(fromPages[i]) || 1;
+          const tp       = parseInt(toPages[i])   || 999;
+
+          const textScan  = await pdfParse(pdfFile.buffer);
+          const isScanned = !textScan.text || textScan.text.trim().length < 100;
+          console.log(`[PDF ${i + 1}/${pdfFiles.length}] "${pdfFile.originalname}" pages:${textScan.numpages} scanned:${isScanned}`);
+
+          if (isScanned) {
+            // Scanned PDF — send as Claude document (fallback handles page range via prompt)
+            const base64 = pdfFile.buffer.toString('base64');
+            contentItems.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } });
+            contentItems.push({ type: 'text', text: `(Above document: "${pdfFile.originalname}", please focus on pages ${fp}–${Math.min(tp, textScan.numpages)})` });
+          } else {
+            // Text PDF — extract page range
+            let currentPage = 0;
+            const data = await pdfParse(pdfFile.buffer, {
+              pagerender(pageData) {
+                currentPage++;
+                if (currentPage >= fp && currentPage <= tp) {
+                  return pageData.getTextContent().then(tc => tc.items.map(it => it.str).join(' '));
+                }
+                return Promise.resolve('');
+              },
+            });
+            let docText = data.text.trim();
+            if (!docText) {
+              const pages = data.text.split('\f');
+              docText = pages.slice(fp - 1, tp).join('\n').trim() || data.text.trim();
             }
-            return Promise.resolve('');
-          },
+            if (docText) {
+              textSections.push(`=== "${pdfFile.originalname}" (pages ${fp}–${Math.min(tp, data.numpages)}) ===\n${docText}`);
+            }
+          }
+        }
+
+        if (textSections.length) {
+          contentItems.push({ type: 'text', text: textSections.join('\n\n') });
+        }
+
+        if (!contentItems.length) {
+          return res.status(400).json({ error: 'validation_error', message: 'Could not extract content from the provided PDFs.' });
+        }
+
+        contentItems.push({
+          type: 'text',
+          text: `Based on all the document content above, generate ${n} ${difficulty} exam questions.${topic ? ` Topic: ${topic}.` : ''}`,
         });
 
-        let docText = data.text.trim();
-        if (!docText) {
-          const pages = data.text.split('\f');
-          docText = pages.slice(fromPage - 1, toPage).join('\n').trim() || data.text.trim();
-          console.log('[PDF] \\f fallback — pages found:', pages.length, 'docText len:', docText.length);
-        }
-        console.log('[PDF] Text extraction: range', fromPage, '-', toPage, '| len:', docText.length);
+        const aiRes     = await callClaude([{ role: 'user', content: contentItems }], buildGenerateSystem(n, difficulty, subject, topic, gradeLevel));
+        const raw       = aiRes.content?.[0]?.text || '';
+        const questions = salvageJSON(raw);
 
-        if (!docText) {
-          return res.status(400).json({ error: 'validation_error', message: 'Could not extract text from this PDF. It may be a scanned document — re-upload and it will be processed automatically.' });
-        }
-
-        const pageRange = `pages ${fromPage} to ${Math.min(toPage, data.numpages)}`;
-        const aiRes = await callClaude([{
-          role: 'user',
-          content: `Generate ${n} exam questions from ${pageRange} of this document:\n\n${docText}${topic ? `\n\nFocus on the topic: ${topic}` : ''}`,
-        }], buildGenerateSystem(n, difficulty, subject, topic, gradeLevel));
-        raw = aiRes.content?.[0]?.text || '';
+        await incrementAiUsage(req.teacherId);
+        const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
+        const used = rows[0]?.ai_usage_month || 0;
+        return res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
       }
 
-      const questions = salvageJSON(raw);
-      await incrementAiUsage(req.teacherId);
-      const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
-      const used = rows[0]?.ai_usage_month || 0;
-      return res.json({ questions, isScanned, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
-    }
+      // Extract mode (single PDF → find existing questions)
+      const singleFile = req.files?.file?.[0];
+      if (!singleFile) return res.status(400).json({ error: 'validation_error', message: 'No PDF uploaded.' });
+      if (singleFile.size > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'PDF must be under 20 MB.' });
 
-    // Default: extract existing questions (sends full PDF to Claude as a document)
-    const base64 = req.file.buffer.toString('base64');
-    const system  = `You are an expert at extracting exam questions from PDF documents.
+      const base64 = singleFile.buffer.toString('base64');
+      const system  = `You are an expert at extracting exam questions from PDF documents.
 Extract all questions from the document and return ONLY a valid JSON array with this structure:
 [{
   "type": "mcq" | "short_answer",
@@ -242,47 +266,56 @@ Extract all questions from the document and return ONLY a valid JSON array with 
 }]
 Preserve all stimulus/context boxes. No markdown. Just the JSON array.`;
 
-    const aiRes = await callClaude([{
-      role: 'user',
-      content: [
-        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-        { type: 'text', text: 'Extract all questions from this exam paper.' },
-      ],
-    }], system);
+      const aiRes = await callClaude([{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+          { type: 'text', text: 'Extract all questions from this exam paper.' },
+        ],
+      }], system);
 
-    const raw       = aiRes.content?.[0]?.text || '';
-    const questions = salvageJSON(raw);
+      const raw       = aiRes.content?.[0]?.text || '';
+      const questions = salvageJSON(raw);
 
-    await incrementAiUsage(req.teacherId);
-    const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
-    const used = rows[0]?.ai_usage_month || 0;
-    res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
-  } catch (err) { next(err); }
-});
+      await incrementAiUsage(req.teacherId);
+      const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
+      const used = rows[0]?.ai_usage_month || 0;
+      res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
+    } catch (err) { next(err); }
+  }
+);
 
 // ── POST /api/v1/ai/from-image ────────────────────────────────────────────────
-// Accepts JPEG/PNG/GIF/WebP images and PDFs (treated as scanned, pages 1-5).
-router.post('/from-image', requireAuth, checkAiLimit, upload.single('file'), async (req, res, next) => {
+// Accepts up to 10 images (JPEG/PNG/WebP) or 1 PDF (treated as scanned).
+router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10), async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'validation_error', message: 'No file uploaded.' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'validation_error', message: 'No files uploaded.' });
 
-    const isPdf    = req.file.mimetype === 'application/pdf';
-    const allowed  = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
-    if (!allowed.includes(req.file.mimetype))
-      return res.status(400).json({ error: 'validation_error', message: 'File must be JPEG, PNG, GIF, WebP, or PDF.' });
+    const IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const allowed     = [...IMAGE_TYPES, 'application/pdf'];
 
-    const sizeLimit = isPdf ? 10 * 1024 * 1024 : 5 * 1024 * 1024;
-    if (req.file.size > sizeLimit)
-      return res.status(400).json({ error: 'validation_error', message: isPdf ? 'PDF must be under 10 MB.' : 'Image must be under 5 MB.' });
+    for (const f of files) {
+      if (!allowed.includes(f.mimetype))
+        return res.status(400).json({ error: 'validation_error', message: `${f.originalname}: must be JPEG, PNG, WebP, or PDF.` });
+      if (f.mimetype === 'application/pdf' && f.size > 10 * 1024 * 1024)
+        return res.status(400).json({ error: 'validation_error', message: `${f.originalname}: PDF must be under 10 MB.` });
+      if (f.mimetype !== 'application/pdf' && f.size > 2 * 1024 * 1024)
+        return res.status(400).json({ error: 'validation_error', message: `${f.originalname}: image must be under 2 MB.` });
+    }
+    const totalSize = files.reduce((s, f) => s + f.size, 0);
+    if (totalSize > 10 * 1024 * 1024)
+      return res.status(400).json({ error: 'validation_error', message: 'Total size must be under 10 MB.' });
 
     const { subject, topic, gradeLevel, difficulty = 'medium', count = 10 } = req.body;
     const n = Math.min(Math.max(parseInt(count) || 10, 1), 50);
 
-    if (isPdf) {
-      const textScan = await pdfParse(req.file.buffer);
-      console.log('[From-Image PDF] pages:', textScan.numpages, '— processing as scanned');
+    // If any file is a PDF, route it through the scanned helper
+    const pdfFile = files.find(f => f.mimetype === 'application/pdf');
+    if (pdfFile) {
+      const textScan = await pdfParse(pdfFile.buffer);
       const raw       = await generateFromScannedPdf({
-        buffer: req.file.buffer,
+        buffer: pdfFile.buffer,
         fromPage: 1, toPage: 5, totalPages: textScan.numpages,
         n, difficulty, subject, topic, gradeLevel,
       });
@@ -293,29 +326,13 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.single('file'), asy
       return res.json({ questions, isScanned: true, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
     }
 
-    // Regular image
-    const base64 = req.file.buffer.toString('base64');
-    const system  = `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.
-Examine the image carefully and generate exactly ${n} multiple-choice questions at ${difficulty} difficulty.
-The questions must test understanding of the specific content shown in the image.
-Return ONLY a valid JSON array:
-[{
-  "type": "mcq",
-  "stem": "question text",
-  "options": [{"letter":"A","text":"..."},{"letter":"B","text":"..."},{"letter":"C","text":"..."},{"letter":"D","text":"..."}],
-  "answer": "A",
-  "subject": "${subject || ''}",
-  "gradeLevel": "${gradeLevel || ''}",
-  "topic": "${topic || ''}",
-  "difficulty": "${difficulty}"
-}]
-No markdown, no explanation, just the JSON array.`;
-
+    // All images — send in one Claude Vision request
+    const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel);
     const aiRes = await callClaude([{
       role: 'user',
       content: [
-        { type: 'image', source: { type: 'base64', media_type: req.file.mimetype, data: base64 } },
-        { type: 'text', text: `Generate ${n} exam questions based on this image.${topic ? ` Topic: ${topic}.` : ''}` },
+        ...files.map(f => ({ type: 'image', source: { type: 'base64', media_type: f.mimetype, data: f.buffer.toString('base64') } })),
+        { type: 'text', text: `These are ${files.length} image(s) from a ${subject || 'subject'} resource. Generate ${n} ${difficulty} exam questions from the content across all these images.${topic ? ` Topic: ${topic}.` : ''}` },
       ],
     }], system);
 

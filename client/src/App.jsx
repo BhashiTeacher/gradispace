@@ -11,6 +11,7 @@ import ResetPassword  from './pages/auth/ResetPassword';
 
 // Dashboard pages
 import Dashboard   from './pages/dashboard/Dashboard';
+import ExamsList   from './pages/exams/ExamsList';
 import ExamBuilder from './pages/exams/ExamBuilder';
 import QuestionBank from './pages/questions/QuestionBank';
 import Classrooms  from './pages/classrooms/Classrooms';
@@ -65,6 +66,7 @@ export default function App() {
       {/* Protected teacher dashboard */}
       <Route path="/" element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route path="dashboard"  element={<Dashboard />} />
+        <Route path="exams"      element={<ExamsList />} />
         <Route path="exams/new"  element={<ExamBuilder />} />
         <Route path="exams/:id"  element={<ExamBuilder />} />
         <Route path="questions"  element={<QuestionBank />} />

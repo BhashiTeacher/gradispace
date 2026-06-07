@@ -504,7 +504,7 @@ export default function Dashboard() {
             {recentExams.length > 0 && (
               <div className="px-5 py-3 border-t border-slate-100">
                 <button
-                  onClick={() => navigate('/exams/new')}
+                  onClick={() => navigate('/exams')}
                   className="text-sm text-slate-500 hover:text-primary-600 transition-colors"
                 >
                   View all exams →

@@ -60,9 +60,19 @@ async function incrementAiUsage(teacherId) {
 }
 
 // ── Generate system prompt ────────────────────────────────────────────────────
-function buildGenerateSystem(n, difficulty, subject, topic, gradeLevel) {
+function buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mcqCount, saCount) {
+  let typeSpec;
+  const hasCounts = (mcqCount !== undefined && saCount !== undefined);
+  if (hasCounts && (mcqCount + saCount) > 0) {
+    const parts = [];
+    if (mcqCount > 0) parts.push(`${mcqCount} multiple choice (MCQ)`);
+    if (saCount   > 0) parts.push(`${saCount} short answer`);
+    typeSpec = `Generate exactly ${parts.join(' and ')} questions at ${difficulty} difficulty.`;
+  } else {
+    typeSpec = `Generate exactly ${n} questions at ${difficulty} difficulty.`;
+  }
   return `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.
-Generate exactly ${n} questions at ${difficulty} difficulty.
+${typeSpec}
 Return ONLY a valid JSON array:
 [{
   "type": "mcq" | "short_answer",
@@ -76,7 +86,7 @@ Return ONLY a valid JSON array:
   "topic": "${topic || ''}",
   "difficulty": "${difficulty}"
 }]
-For short_answer questions omit options and answer. No markdown, no explanation, just the JSON array.`;
+For MCQ include all 4 options and the correct answer letter. For short_answer omit options and answer. No markdown, no explanation, just the JSON array.`;
 }
 
 // ── Scanned PDF helper ────────────────────────────────────────────────────────
@@ -124,26 +134,13 @@ async function generateFromScannedPdf({ buffer, fromPage, toPage, totalPages, n,
 // ── POST /api/v1/ai/generate ──────────────────────────────────────────────────
 router.post('/generate', requireAuth, checkAiLimit, async (req, res, next) => {
   try {
-    const { content, subject, topic, gradeLevel, difficulty = 'medium', count = 10, types = ['mcq'] } = req.body;
+    const { content, subject, topic, gradeLevel, difficulty = 'medium', count = 10, mcqCount, saCount } = req.body;
     if (!content) return res.status(400).json({ error: 'validation_error', message: 'content is required.' });
 
-    const system = `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.
-Generate exactly ${count} questions at ${difficulty} difficulty on the topic: ${topic || subject || 'the provided content'}.
-Types requested: ${types.join(', ')}.
-Return ONLY a valid JSON array of question objects with this structure:
-[{
-  "type": "mcq" | "short_answer",
-  "stem": "question text",
-  "options": [{"letter":"A","text":"..."},{"letter":"B","text":"..."},{"letter":"C","text":"..."}],
-  "answer": "A",
-  "part": "Part 1",
-  "partInstruction": "For each question, choose the correct answer.",
-  "subject": "${subject||''}",
-  "gradeLevel": "${gradeLevel||''}",
-  "topic": "${topic||''}",
-  "difficulty": "${difficulty}"
-}]
-For short_answer questions omit options and answer. No markdown, no explanation, just the JSON array.`;
+    const mq = parseInt(mcqCount) || 0;
+    const sq = parseInt(saCount)  || 0;
+    const n  = (mq + sq) > 0 ? Math.min(mq + sq, 20) : Math.min(Math.max(parseInt(count) || 10, 1), 50);
+    const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mq || undefined, sq || undefined);
 
     const aiRes    = await callClaude([{ role: 'user', content }], system);
     const raw      = aiRes.content?.[0]?.text || '';
@@ -177,7 +174,9 @@ router.post(
         if (totalSize > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'Total PDF size must be under 20 MB.' });
 
         const { difficulty = 'medium', subject, topic, gradeLevel, instructions = '' } = req.body;
-        const n         = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
+        const mq = parseInt(req.body.mcqCount) || 0;
+        const sq = parseInt(req.body.saCount)  || 0;
+        const n  = (mq + sq) > 0 ? Math.min(mq + sq, 20) : Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
         const fromPages = req.body.fromPages ? JSON.parse(req.body.fromPages) : [parseInt(req.body.fromPage) || 1];
         const toPages   = req.body.toPages   ? JSON.parse(req.body.toPages)   : [parseInt(req.body.toPage)   || 999];
 
@@ -237,7 +236,7 @@ router.post(
           text: `Based on all the document content above, generate ${n} ${difficulty} exam questions.${topic ? ` Topic: ${topic}.` : ''}${instructions ? ` Additional instructions: ${instructions}` : ''}`,
         });
 
-        const aiRes     = await callClaude([{ role: 'user', content: contentItems }], buildGenerateSystem(n, difficulty, subject, topic, gradeLevel));
+        const aiRes     = await callClaude([{ role: 'user', content: contentItems }], buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mq || undefined, sq || undefined));
         const raw       = aiRes.content?.[0]?.text || '';
         const questions = salvageJSON(raw);
 
@@ -308,7 +307,9 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
       return res.status(400).json({ error: 'validation_error', message: 'Total size must be under 10 MB.' });
 
     const { subject, topic, gradeLevel, difficulty = 'medium', count = 10, instructions = '' } = req.body;
-    const n = Math.min(Math.max(parseInt(count) || 10, 1), 50);
+    const mq = parseInt(req.body.mcqCount) || 0;
+    const sq = parseInt(req.body.saCount)  || 0;
+    const n  = (mq + sq) > 0 ? Math.min(mq + sq, 20) : Math.min(Math.max(parseInt(count) || 10, 1), 50);
 
     // If any file is a PDF, route it through the scanned helper
     const pdfFile = files.find(f => f.mimetype === 'application/pdf');
@@ -327,7 +328,7 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
     }
 
     // All images — send in one Claude Vision request
-    const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel);
+    const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mq || undefined, sq || undefined);
     const aiRes = await callClaude([{
       role: 'user',
       content: [
@@ -368,6 +369,11 @@ router.post(
       }
 
       const { subject = '', gradeLevel = '', instructions = '' } = req.body;
+      const mq = parseInt(req.body.mcqCount) || 0;
+      const sq = parseInt(req.body.saCount)  || 0;
+      const countHint = (mq + sq) > 0
+        ? `\nExpected question types: ${mq > 0 ? `${mq} MCQ` : ''}${mq > 0 && sq > 0 ? ' and ' : ''}${sq > 0 ? `${sq} short answer` : ''}. Prioritise these types when extracting.`
+        : '';
 
       const system = `You are converting a physical exam paper into electronic format.
 Your task is to EXTRACT and PRESERVE the exact questions from this exam paper.
@@ -375,7 +381,7 @@ Do NOT generate new questions — only extract what is already there.
 
 Subject: ${subject || 'Not specified'}
 Grade Level: ${gradeLevel || 'Not specified'}
-Teacher instructions: ${instructions || 'None'}
+Teacher instructions: ${instructions || 'None'}${countHint}
 
 For each question found:
 - Preserve the exact question text and numbering

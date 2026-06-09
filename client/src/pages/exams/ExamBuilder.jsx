@@ -411,6 +411,8 @@ export default function ExamBuilder() {
   const [aiSubject, setAiSubject]   = useState('');
   const [aiCount, setAiCount]       = useState(10);
   const [aiDiff, setAiDiff]         = useState('medium');
+  const [aiMcqCount, setAiMcqCount] = useState(5);
+  const [aiSaCount, setAiSaCount]   = useState(0);
   const [aiPassage, setAiPassage]   = useState(false);
   const [aiInstructions, setAiInstructions] = useState('');
   const [aiLoading, setAiLoading]   = useState(false);
@@ -451,6 +453,8 @@ export default function ExamBuilder() {
   const [importPaperPdfFiles, setImportPaperPdfFiles]     = useState([]);
   const [importPaperImgPreviews, setImportPaperImgPreviews] = useState([]);
   const [importPaperInstructions, setImportPaperInstructions] = useState('');
+  const [importPaperMcqCount, setImportPaperMcqCount]     = useState(0);
+  const [importPaperSaCount, setImportPaperSaCount]       = useState(0);
   const [importPaperSubject, setImportPaperSubject]       = useState('');
   const [importPaperGrade, setImportPaperGrade]           = useState('');
   const [importPaperLoading, setImportPaperLoading]       = useState(false);
@@ -590,6 +594,7 @@ export default function ExamBuilder() {
     setAiLoading(true);
     setAiResults([]);
     try {
+      const totalCount = Math.min((aiMcqCount || 0) + (aiSaCount || 0), 20) || 5;
       const { questions: qs } = await api.post('/ai/generate', {
         content:        aiInstructions.trim()
                           ? `${aiPrompt}\n\nAdditional instructions: ${aiInstructions.trim()}`
@@ -598,8 +603,9 @@ export default function ExamBuilder() {
         topic,
         gradeLevel,
         difficulty:     aiDiff,
-        count:          Math.min(Math.max(parseInt(aiCount) || 10, 1), 50),
-        types:          ['mcq'],
+        count:          totalCount,
+        mcqCount:       aiMcqCount,
+        saCount:        aiSaCount,
         includePassage: aiPassage,
       });
       const normalized = qs.map(q => ({
@@ -640,7 +646,9 @@ export default function ExamBuilder() {
     try {
       const fd = new FormData();
       aiImgFiles.forEach(f => fd.append('images', f));
-      fd.append('count', Math.min(Math.max(parseInt(aiCount) || 10, 1), 50));
+      fd.append('count', Math.min((aiMcqCount || 0) + (aiSaCount || 0), 20) || 5);
+      fd.append('mcqCount', aiMcqCount || 0);
+      fd.append('saCount', aiSaCount || 0);
       fd.append('difficulty', aiDiff);
       fd.append('subject', aiSubject || subject || '');
       fd.append('topic', topic || '');
@@ -677,7 +685,9 @@ export default function ExamBuilder() {
       fd.append('mode', 'generate');
       fd.append('fromPages', JSON.stringify(aiPdfFiles.map(({ fromPage }) => parseInt(fromPage) || 1)));
       fd.append('toPages',   JSON.stringify(aiPdfFiles.map(({ toPage })   => parseInt(toPage)   || 999)));
-      fd.append('count', Math.min(Math.max(parseInt(aiCount) || 10, 1), 50));
+      fd.append('count', Math.min((aiMcqCount || 0) + (aiSaCount || 0), 20) || 5);
+      fd.append('mcqCount', aiMcqCount || 0);
+      fd.append('saCount', aiSaCount || 0);
       fd.append('difficulty', aiDiff);
       fd.append('subject', aiSubject || subject || '');
       fd.append('topic', topic || '');
@@ -750,6 +760,8 @@ export default function ExamBuilder() {
       importPaperImgFiles.forEach(f => fd.append('images', f));
       importPaperPdfFiles.forEach(f => fd.append('pdfs', f));
       fd.append('instructions', importPaperInstructions || '');
+      fd.append('mcqCount', importPaperMcqCount || 0);
+      fd.append('saCount', importPaperSaCount || 0);
       fd.append('subject', importPaperSubject || subject || '');
       fd.append('gradeLevel', importPaperGrade || gradeLevel || '');
       const { questions: qs } = await api.upload('/ai/import-paper', fd);
@@ -1080,7 +1092,6 @@ export default function ExamBuilder() {
                 { key: 'manual',       label: 'Manual',        icon: PencilSquareIcon },
                 { key: 'ai',           label: 'AI Generate',   icon: SparklesIcon },
                 { key: 'import_paper', label: 'Import Paper',  icon: DocumentMagnifyingGlassIcon },
-                { key: 'pdf',          label: 'Import PDF',    icon: DocumentArrowUpIcon },
                 { key: 'bank',         label: 'Question Bank', icon: CircleStackIcon },
               ].map(({ key, label, icon: Icon }) => (
                 <button key={key} onClick={() => setActiveTab(key)}
@@ -1337,21 +1348,35 @@ export default function ExamBuilder() {
                           placeholder="Describe the topic, paste a passage, or give specific instructions — e.g. 'Generate 10 questions about the water cycle for Grade 8.'" />
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <div>
-                          <label className="label">Count</label>
-                          <input className="input" type="number" min="1" max="50"
-                            value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="label">MCQ Questions</label>
+                            <input className="input" type="number" min="0" max="20"
+                              value={aiMcqCount}
+                              onChange={e => setAiMcqCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))} />
+                          </div>
+                          <div>
+                            <label className="label flex items-center gap-1">Short Answer <ProBadge /></label>
+                            <input className="input" type="number" min="0" max="10"
+                              disabled={!isPro}
+                              onClick={() => { if (!isPro) navigate('/billing'); }}
+                              value={aiSaCount}
+                              onChange={e => isPro && setAiSaCount(Math.max(0, Math.min(10, parseInt(e.target.value) || 0)))} />
+                          </div>
                         </div>
-                        <div>
-                          <label className="label">Difficulty</label>
-                          <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-slate-500">
+                            Total: <b>{Math.min((aiMcqCount || 0) + (aiSaCount || 0), 20) || 5}</b> questions
+                            {(aiMcqCount || 0) + (aiSaCount || 0) > 20 && <span className="text-red-500 ml-1">(max 20)</span>}
+                          </span>
+                          <select className="input w-auto text-xs py-1" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
                             <option value="easy">Easy</option>
                             <option value="medium">Medium</option>
                             <option value="hard">Hard</option>
                           </select>
                         </div>
-                        <div className="sm:col-span-2">
+                        <div>
                           <label className="label">Subject override</label>
                           <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
                             placeholder={subject || 'Uses exam subject'} />
@@ -1430,21 +1455,35 @@ export default function ExamBuilder() {
                           </div>
                         )}
 
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          <div>
-                            <label className="label">Count</label>
-                            <input className="input" type="number" min="1" max="50"
-                              value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="label">MCQ Questions</label>
+                              <input className="input" type="number" min="0" max="20"
+                                value={aiMcqCount}
+                                onChange={e => setAiMcqCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))} />
+                            </div>
+                            <div>
+                              <label className="label flex items-center gap-1">Short Answer <ProBadge /></label>
+                              <input className="input" type="number" min="0" max="10"
+                                disabled={!isPro}
+                                onClick={() => { if (!isPro) navigate('/billing'); }}
+                                value={aiSaCount}
+                                onChange={e => isPro && setAiSaCount(Math.max(0, Math.min(10, parseInt(e.target.value) || 0)))} />
+                            </div>
                           </div>
-                          <div>
-                            <label className="label">Difficulty</label>
-                            <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-slate-500">
+                              Total: <b>{Math.min((aiMcqCount || 0) + (aiSaCount || 0), 20) || 5}</b> questions
+                              {(aiMcqCount || 0) + (aiSaCount || 0) > 20 && <span className="text-red-500 ml-1">(max 20)</span>}
+                            </span>
+                            <select className="input w-auto text-xs py-1" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
                               <option value="easy">Easy</option>
                               <option value="medium">Medium</option>
                               <option value="hard">Hard</option>
                             </select>
                           </div>
-                          <div className="sm:col-span-2">
+                          <div>
                             <label className="label">Subject override</label>
                             <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
                               placeholder={subject || 'Uses exam subject'} />
@@ -1536,21 +1575,35 @@ export default function ExamBuilder() {
                           Scanned PDFs are processed up to 5 pages at a time using AI vision — this may take 30–60 seconds.
                         </p>
 
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          <div>
-                            <label className="label">Count</label>
-                            <input className="input" type="number" min="1" max="50"
-                              value={aiCount} onChange={e => setAiCount(e.target.value)} />
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="label">MCQ Questions</label>
+                              <input className="input" type="number" min="0" max="20"
+                                value={aiMcqCount}
+                                onChange={e => setAiMcqCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))} />
+                            </div>
+                            <div>
+                              <label className="label flex items-center gap-1">Short Answer <ProBadge /></label>
+                              <input className="input" type="number" min="0" max="10"
+                                disabled={!isPro}
+                                onClick={() => { if (!isPro) navigate('/billing'); }}
+                                value={aiSaCount}
+                                onChange={e => isPro && setAiSaCount(Math.max(0, Math.min(10, parseInt(e.target.value) || 0)))} />
+                            </div>
                           </div>
-                          <div>
-                            <label className="label">Difficulty</label>
-                            <select className="input" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-slate-500">
+                              Total: <b>{Math.min((aiMcqCount || 0) + (aiSaCount || 0), 20) || 5}</b> questions
+                              {(aiMcqCount || 0) + (aiSaCount || 0) > 20 && <span className="text-red-500 ml-1">(max 20)</span>}
+                            </span>
+                            <select className="input w-auto text-xs py-1" value={aiDiff} onChange={e => setAiDiff(e.target.value)}>
                               <option value="easy">Easy</option>
                               <option value="medium">Medium</option>
                               <option value="hard">Hard</option>
                             </select>
                           </div>
-                          <div className="sm:col-span-2">
+                          <div>
                             <label className="label">Subject override</label>
                             <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
                               placeholder={subject || 'Uses exam subject'} />
@@ -1790,6 +1843,32 @@ export default function ExamBuilder() {
                           onChange={e => setImportPaperGrade(e.target.value)}
                           placeholder={gradeLevel || 'e.g. Grade 10'} />
                       </div>
+                    </div>
+
+                    {/* Expected question types */}
+                    <div className="space-y-2">
+                      <p className="label">Expected question types <span className="text-slate-400 font-normal">(optional hints)</span></p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="label text-xs text-slate-500">MCQ Questions</label>
+                          <input className="input" type="number" min="0" max="100"
+                            value={importPaperMcqCount}
+                            onChange={e => setImportPaperMcqCount(Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))} />
+                        </div>
+                        <div>
+                          <label className="label text-xs text-slate-500 flex items-center gap-1">Short Answer <ProBadge /></label>
+                          <input className="input" type="number" min="0" max="100"
+                            disabled={!isPro}
+                            onClick={() => { if (!isPro) navigate('/billing'); }}
+                            value={importPaperSaCount}
+                            onChange={e => isPro && setImportPaperSaCount(Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))} />
+                        </div>
+                      </div>
+                      {(importPaperMcqCount > 0 || importPaperSaCount > 0) && (
+                        <p className="text-xs text-slate-400">
+                          AI will look for ~{importPaperMcqCount} MCQ and ~{importPaperSaCount} short answer questions on the paper.
+                        </p>
+                      )}
                     </div>
 
                     {/* Instructions */}

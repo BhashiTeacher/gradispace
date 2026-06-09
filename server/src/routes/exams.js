@@ -233,6 +233,26 @@ router.put('/:examId/questions/:questionId', requireAuth, async (req, res, next)
   } catch (err) { next(err); }
 });
 
+// Helper: fetch a remote image as a Buffer for embedding in PDFs
+async function fetchImageBuffer(url) {
+  if (!url) return null;
+  try {
+    const { get: httpsGet } = require('https');
+    const { get: httpGet  } = require('http');
+    const fetcher = url.startsWith('https') ? httpsGet : httpGet;
+    return await new Promise((resolve) => {
+      fetcher(url, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', () => resolve(null));
+      }).on('error', () => resolve(null));
+    });
+  } catch {
+    return null;
+  }
+}
+
 // GET /api/v1/exams/:id/print-pdf  — generate printable exam paper (Pro)
 router.get('/:id/print-pdf', requireAuth, requirePlan('pro', 'school'), async (req, res, next) => {
   try {
@@ -250,186 +270,231 @@ router.get('/:id/print-pdf', requireAuth, requirePlan('pro', 'school'), async (r
              COALESCE(eq.options, q.options) AS options,
              COALESCE(eq.passage, q.passage) AS passage,
              COALESCE(eq.stimulus, q.stimulus) AS stimulus,
+             COALESCE(eq.image_url, q.image_url) AS image_url,
              eq.part, eq.part_instruction
       FROM exam_questions eq
       JOIN questions q ON q.id=eq.question_id
       WHERE eq.exam_id=$1 ORDER BY eq.order_num
     `, [exam.id]);
 
-    const doc = new PDFDocument({
-      size: 'A4',
-      margins: { top: 50, bottom: 60, left: 50, right: 50 },
-      bufferPages: true,
-    });
+    // Pre-fetch all images before building the PDF so network errors don't interrupt rendering
+    const imageCache = {};
+    const urlsToFetch = new Set();
+    for (const q of qRows) {
+      if (q.image_url)           urlsToFetch.add(q.image_url);
+      if (q.stimulus?.imageUrl)  urlsToFetch.add(q.stimulus.imageUrl);
+      if (Array.isArray(q.options)) {
+        for (const opt of q.options) if (opt.imageUrl) urlsToFetch.add(opt.imageUrl);
+      }
+    }
+    await Promise.all([...urlsToFetch].map(async url => {
+      const buf = await fetchImageBuffer(url);
+      if (buf) imageCache[url] = buf;
+      else console.warn('[PDF] Could not fetch image:', url);
+    }));
 
     const safeName = (exam.title || 'exam').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 50);
+    const brand    = /^#[0-9a-f]{3,6}$/i.test(exam.brand_colour || '') ? exam.brand_colour : '#003865';
 
-    // Buffer the PDF so errors before doc.end() can still return a JSON error
-    const chunks = [];
-    doc.on('data', c => chunks.push(c));
-
-    const W = doc.page.width - 100;  // content width
-    const L = 50;                    // left margin
-    const brand = /^#[0-9a-f]{3,6}$/i.test(exam.brand_colour || '') ? exam.brand_colour : '#003865';
-    const PAGE_H = doc.page.height;
-    const SAFE_BOTTOM = PAGE_H - 65;
-
-    function needPage(est = 80) {
-      if (doc.y + est > SAFE_BOTTOM) doc.addPage();
-    }
-
-    // ─── Header ──────────────────────────────────────────────────────────────
-    doc.rect(L, 38, W, 3).fill(brand);
-    doc.y = 49;
-
-    const school = (exam.portal_title || exam.teacher_name || '').trim();
-    if (school) {
-      doc.font('Helvetica').fontSize(8).fillColor('#888888')
-         .text(school.toUpperCase(), L, doc.y, { width: W, align: 'center' });
-      doc.y += 4;
-    }
-
-    doc.font('Helvetica-Bold').fontSize(18).fillColor('#111111')
-       .text(exam.title, L, doc.y, { width: W, align: 'center' });
-    doc.moveDown(0.25);
-
-    const meta = [
-      exam.subject,
-      exam.grade_level ? `Grade ${exam.grade_level}` : '',
-      exam.duration    ? `${exam.duration} min`        : '',
-      `${qRows.length} question${qRows.length !== 1 ? 's' : ''}`,
-    ].filter(Boolean).join('   ·   ');
-    doc.font('Helvetica').fontSize(9).fillColor('#666666')
-       .text(meta, L, doc.y, { width: W, align: 'center' });
-    doc.moveDown(0.65);
-
-    doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
-    doc.moveDown(0.55);
-
-    // ─── Student details box ──────────────────────────────────────────────────
-    const boxY = doc.y;
-    doc.moveTo(L, boxY).lineTo(L + W, boxY).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
-    doc.moveTo(L, boxY + 26).lineTo(L + W, boxY + 26).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
-    doc.font('Helvetica').fontSize(9).fillColor('#444444')
-       .text('Name:', L + 6, boxY + 8, { lineBreak: false, width: 32 });
-    doc.moveTo(L + 40, boxY + 22).lineTo(L + 220, boxY + 22).lineWidth(0.5).strokeColor('#AAAAAA').stroke();
-    doc.font('Helvetica').fontSize(9).fillColor('#444444')
-       .text('Class / Index:', L + 228, boxY + 8, { lineBreak: false, width: 72 });
-    doc.moveTo(L + 302, boxY + 22).lineTo(L + W, boxY + 22).lineWidth(0.5).strokeColor('#AAAAAA').stroke();
-    doc.y = boxY + 32;
-
-    if (exam.description) {
-      doc.moveDown(0.4);
-      doc.font('Helvetica-Oblique').fontSize(9).fillColor('#444444')
-         .text(`Instructions: ${exam.description}`, L, doc.y, { width: W });
-    }
-    doc.moveDown(0.75);
-    doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
-    doc.moveDown(0.8);
-
-    // ─── Questions ────────────────────────────────────────────────────────────
-    let currentPart = null;
-    let qNum = 0;
-
-    for (const q of qRows) {
-      const part = q.part || 'Part 1';
-
-      // Part header
-      if (part !== currentPart) {
-        currentPart = part;
-        needPage(65);
-        if (qNum > 0) doc.moveDown(0.5);
-        doc.font('Helvetica-Bold').fontSize(11).fillColor(brand)
-           .text(part, L, doc.y, { width: W });
-        if (q.part_instruction) {
-          doc.font('Helvetica-Oblique').fontSize(9).fillColor('#555555')
-             .text(q.part_instruction, L + 8, doc.y, { width: W - 8 });
-        }
-        doc.moveDown(0.3);
-        doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
-        doc.moveDown(0.5);
-      }
-
-      qNum++;
-      needPage(80);
-
-      // Stimulus
-      if (q.stimulus && (q.stimulus.title || q.stimulus.text)) {
-        if (q.stimulus.title) {
-          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#1E40AF')
-             .text(q.stimulus.title, L + 8, doc.y, { width: W - 8 });
-        }
-        if (q.stimulus.text) {
-          doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#374151')
-             .text(q.stimulus.text, L + 8, doc.y, { width: W - 8 });
-        }
-        doc.moveDown(0.35);
-      } else if (q.passage && (q.passage.title || q.passage.text)) {
-        if (q.passage.title) {
-          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#374151')
-             .text(q.passage.title, L + 8, doc.y, { width: W - 8 });
-        }
-        if (q.passage.text) {
-          doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#444444')
-             .text(q.passage.text, L + 8, doc.y, { width: W - 8 });
-        }
-        doc.moveDown(0.3);
-      }
-
-      // Question number + stem
-      const stemY = doc.y;
-      doc.font('Helvetica-Bold').fontSize(10).fillColor('#111111')
-         .text(`${qNum}.`, L, stemY, { width: 22, lineBreak: false });
-      doc.font('Helvetica').fontSize(10).fillColor('#111111')
-         .text(q.stem, L + 24, stemY, { width: W - 24 });
-      doc.moveDown(0.4);
-
-      // MCQ options
-      if (q.type === 'mcq' && Array.isArray(q.options)) {
-        for (const opt of q.options) {
-          if (!opt.text) continue;
-          needPage(22);
-          const oy = doc.y;
-          doc.circle(L + 32, oy + 5.5, 4).lineWidth(0.5).strokeColor('#999999').stroke();
-          doc.font('Helvetica-Bold').fontSize(9).fillColor('#666666')
-             .text(opt.letter, L + 29.5, oy + 1.5, { lineBreak: false, width: 9 });
-          doc.font('Helvetica').fontSize(9.5).fillColor('#222222')
-             .text(opt.text, L + 45, oy, { width: W - 45 });
-          doc.moveDown(0.15);
-        }
-      }
-
-      // Short answer lines
-      if (q.type === 'short_answer') {
-        for (let i = 0; i < 4; i++) {
-          needPage(24);
-          const lY = doc.y + 16;
-          doc.moveTo(L + 24, lY).lineTo(L + W, lY)
-             .lineWidth(0.5).dash(3, { space: 4 }).strokeColor('#BBBBBB').stroke().undash();
-          doc.y = lY + 6;
-        }
-      }
-
-      doc.moveDown(0.8);
-    }
-
-    // ─── Page numbers ─────────────────────────────────────────────────────────
-    const range = doc.bufferedPageRange();
-    for (let i = 0; i < range.count; i++) {
-      doc.switchToPage(range.start + i);
-      const fy = PAGE_H - 42;
-      doc.moveTo(L, fy).lineTo(L + W, fy).lineWidth(0.3).strokeColor('#DDDDDD').stroke();
-      doc.font('Helvetica').fontSize(8).fillColor('#AAAAAA')
-         .text(`${exam.title}   ·   Page ${i + 1} of ${range.count}`, L, fy + 7, { width: W, align: 'center' });
-    }
-
-    await new Promise((resolve, reject) => {
-      doc.on('end', resolve);
+    const pdfBuffer = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const doc = new PDFDocument({
+        bufferPages: true,
+        size: 'A4',
+        margins: { top: 50, bottom: 60, left: 50, right: 50 },
+      });
+      doc.on('data',  c => chunks.push(c));
+      doc.on('end',   () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+
+      const W           = doc.page.width - 100;
+      const L           = 50;
+      const PAGE_H      = doc.page.height;
+      const SAFE_BOTTOM = PAGE_H - 65;
+
+      // Only adds a page when content genuinely needs it
+      function needPage(est = 80) {
+        if (doc.y + est > SAFE_BOTTOM) doc.addPage();
+      }
+
+      // ─── Header ──────────────────────────────────────────────────────────────
+      doc.rect(L, 38, W, 3).fill(brand);
+      doc.y = 49;
+
+      const school = (exam.portal_title || exam.teacher_name || '').trim();
+      if (school) {
+        doc.font('Helvetica').fontSize(8).fillColor('#888888')
+           .text(school.toUpperCase(), L, doc.y, { width: W, align: 'center' });
+        doc.y += 4;
+      }
+      doc.font('Helvetica-Bold').fontSize(18).fillColor('#111111')
+         .text(exam.title, L, doc.y, { width: W, align: 'center' });
+      doc.moveDown(0.25);
+
+      const meta = [
+        exam.subject,
+        exam.grade_level ? `Grade ${exam.grade_level}` : '',
+        exam.duration    ? `${exam.duration} min`        : '',
+        `${qRows.length} question${qRows.length !== 1 ? 's' : ''}`,
+      ].filter(Boolean).join('   ·   ');
+      doc.font('Helvetica').fontSize(9).fillColor('#666666')
+         .text(meta, L, doc.y, { width: W, align: 'center' });
+      doc.moveDown(0.65);
+
+      doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+      doc.moveDown(0.55);
+
+      // ─── Student details box ────────────────────────────────────────────────
+      const boxY = doc.y;
+      doc.moveTo(L, boxY).lineTo(L + W, boxY).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+      doc.moveTo(L, boxY + 26).lineTo(L + W, boxY + 26).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+      doc.font('Helvetica').fontSize(9).fillColor('#444444')
+         .text('Name:', L + 6, boxY + 8, { lineBreak: false, width: 32 });
+      doc.moveTo(L + 40, boxY + 22).lineTo(L + 220, boxY + 22).lineWidth(0.5).strokeColor('#AAAAAA').stroke();
+      doc.font('Helvetica').fontSize(9).fillColor('#444444')
+         .text('Class / Index:', L + 228, boxY + 8, { lineBreak: false, width: 72 });
+      doc.moveTo(L + 302, boxY + 22).lineTo(L + W, boxY + 22).lineWidth(0.5).strokeColor('#AAAAAA').stroke();
+      doc.y = boxY + 32;
+
+      if (exam.description) {
+        doc.moveDown(0.4);
+        doc.font('Helvetica-Oblique').fontSize(9).fillColor('#444444')
+           .text(`Instructions: ${exam.description}`, L, doc.y, { width: W });
+      }
+      doc.moveDown(0.75);
+      doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.5).strokeColor('#CCCCCC').stroke();
+      doc.moveDown(0.8);
+
+      // ─── Questions ────────────────────────────────────────────────────────────
+      let currentPart = null;
+      let qNum = 0;
+
+      for (let qi = 0; qi < qRows.length; qi++) {
+        const q      = qRows[qi];
+        const isLast = qi === qRows.length - 1;
+        const part   = q.part || 'Part 1';
+
+        // Part header
+        if (part !== currentPart) {
+          currentPart = part;
+          needPage(65);
+          if (qNum > 0) doc.moveDown(0.5);
+          doc.font('Helvetica-Bold').fontSize(11).fillColor(brand)
+             .text(part, L, doc.y, { width: W });
+          if (q.part_instruction) {
+            doc.font('Helvetica-Oblique').fontSize(9).fillColor('#555555')
+               .text(q.part_instruction, L + 8, doc.y, { width: W - 8 });
+          }
+          doc.moveDown(0.3);
+          doc.moveTo(L, doc.y).lineTo(L + W, doc.y).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
+          doc.moveDown(0.5);
+        }
+
+        qNum++;
+        needPage(80);
+
+        // Stimulus block (with optional image)
+        if (q.stimulus && (q.stimulus.title || q.stimulus.text || q.stimulus.imageUrl)) {
+          needPage(60);
+          if (q.stimulus.title) {
+            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#1E40AF')
+               .text(q.stimulus.title, L + 8, doc.y, { width: W - 8 });
+          }
+          if (q.stimulus.imageUrl && imageCache[q.stimulus.imageUrl]) {
+            try {
+              needPage(150);
+              doc.image(imageCache[q.stimulus.imageUrl], L + 8, doc.y, { fit: [W - 16, 200], align: 'center' });
+              doc.moveDown(0.5);
+            } catch (e) { console.warn('[PDF] Stimulus image embed failed:', e.message); }
+          }
+          if (q.stimulus.text) {
+            doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#374151')
+               .text(q.stimulus.text, L + 8, doc.y, { width: W - 8 });
+          }
+          doc.moveDown(0.35);
+        } else if (q.passage && (q.passage.title || q.passage.text)) {
+          needPage(60);
+          if (q.passage.title) {
+            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#374151')
+               .text(q.passage.title, L + 8, doc.y, { width: W - 8 });
+          }
+          if (q.passage.text) {
+            doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#444444')
+               .text(q.passage.text, L + 8, doc.y, { width: W - 8 });
+          }
+          doc.moveDown(0.3);
+        }
+
+        // Question number + stem
+        needPage(40);
+        const stemY = doc.y;
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#111111')
+           .text(`${qNum}.`, L, stemY, { width: 22, lineBreak: false });
+        doc.font('Helvetica').fontSize(10).fillColor('#111111')
+           .text(q.stem, L + 24, stemY, { width: W - 24 });
+        doc.moveDown(0.4);
+
+        // Question-level image
+        if (q.image_url && imageCache[q.image_url]) {
+          try {
+            needPage(150);
+            doc.image(imageCache[q.image_url], { fit: [Math.min(W - 24, 400), 250], align: 'center' });
+            doc.moveDown(0.8);
+          } catch (e) { console.warn('[PDF] Question image embed failed:', e.message); }
+        }
+
+        // MCQ options
+        if (q.type === 'mcq' && Array.isArray(q.options)) {
+          for (const opt of q.options) {
+            if (!opt.text && !opt.imageUrl) continue;
+            needPage(opt.imageUrl ? 90 : 22);
+            const oy = doc.y;
+            doc.circle(L + 32, oy + 5.5, 4).lineWidth(0.5).strokeColor('#999999').stroke();
+            doc.font('Helvetica-Bold').fontSize(9).fillColor('#666666')
+               .text(opt.letter, L + 29.5, oy + 1.5, { lineBreak: false, width: 9 });
+            if (opt.imageUrl && imageCache[opt.imageUrl]) {
+              try {
+                doc.image(imageCache[opt.imageUrl], L + 45, oy, { fit: [180, 130] });
+                doc.moveDown(0.4);
+              } catch (e) { console.warn('[PDF] Option image embed failed:', e.message); }
+            }
+            if (opt.text) {
+              doc.font('Helvetica').fontSize(9.5).fillColor('#222222')
+                 .text(opt.text, L + 45, doc.y, { width: W - 45 });
+            }
+            doc.moveDown(0.15);
+          }
+        }
+
+        // Short answer lines
+        if (q.type === 'short_answer') {
+          for (let i = 0; i < 4; i++) {
+            needPage(24);
+            const lY = doc.y + 16;
+            doc.moveTo(L + 24, lY).lineTo(L + W, lY)
+               .lineWidth(0.5).dash(3, { space: 4 }).strokeColor('#BBBBBB').stroke().undash();
+            doc.y = lY + 6;
+          }
+        }
+
+        // Skip moveDown after the very last question to prevent phantom blank page
+        if (!isLast) doc.moveDown(0.8);
+      }
+
+      // ─── Page numbers — AFTER all content, before doc.end() ────────────────
+      const range = doc.bufferedPageRange();
+      for (let i = 0; i < range.count; i++) {
+        doc.switchToPage(i);
+        const fy = PAGE_H - 42;
+        doc.moveTo(L, fy).lineTo(L + W, fy).lineWidth(0.3).strokeColor('#DDDDDD').stroke();
+        doc.font('Helvetica').fontSize(8).fillColor('#AAAAAA')
+           .text(`${exam.title}   ·   Page ${i + 1} of ${range.count}`, L, fy + 7, { width: W, align: 'center' });
+      }
+
+      // Called exactly once, after page numbering — never before
       doc.end();
     });
 
-    const pdfBuffer = Buffer.concat(chunks);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}_paper.pdf"`);
     res.setHeader('Content-Length', pdfBuffer.length);

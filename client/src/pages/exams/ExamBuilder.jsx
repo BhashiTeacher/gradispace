@@ -429,12 +429,6 @@ export default function ExamBuilder() {
     return () => urls.forEach(u => URL.revokeObjectURL(u));
   }, [aiImgFiles]);
 
-  useEffect(() => {
-    const urls = importPaperImgFiles.map(f => URL.createObjectURL(f));
-    setImportPaperImgPreviews(urls);
-    return () => urls.forEach(u => URL.revokeObjectURL(u));
-  }, [importPaperImgFiles]);
-
   // ── PDF tab state ─────────────────────────────────────────────────────────
   const pdfInputRef                     = useRef(null);
   const [pdfFileName, setPdfFileName]   = useState('');
@@ -462,6 +456,12 @@ export default function ExamBuilder() {
   const [importPaperLoading, setImportPaperLoading]       = useState(false);
   const [importPaperResults, setImportPaperResults]       = useState([]);
   const [importPaperSel, setImportPaperSel]               = useState(new Set());
+
+  useEffect(() => {
+    const urls = importPaperImgFiles.map(f => URL.createObjectURL(f));
+    setImportPaperImgPreviews(urls);
+    return () => urls.forEach(u => URL.revokeObjectURL(u));
+  }, [importPaperImgFiles]);
 
   // ── Load exam when editing ────────────────────────────────────────────────
   useEffect(() => {

@@ -2,8 +2,8 @@ const router    = require('express').Router();
 const multer    = require('multer');
 const pdfParse  = require('pdf-parse');
 const db        = require('../db');
-const { requireAuth }  = require('../middleware/auth');
-const { checkAiLimit } = require('../middleware/plan');
+const { requireAuth }              = require('../middleware/auth');
+const { checkAiLimit, requirePlan } = require('../middleware/plan');
 
 // Single multer instance; per-endpoint limits validated in handlers
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -176,7 +176,7 @@ router.post(
         const totalSize = pdfFiles.reduce((s, f) => s + f.size, 0);
         if (totalSize > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'Total PDF size must be under 20 MB.' });
 
-        const { difficulty = 'medium', subject, topic, gradeLevel } = req.body;
+        const { difficulty = 'medium', subject, topic, gradeLevel, instructions = '' } = req.body;
         const n         = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
         const fromPages = req.body.fromPages ? JSON.parse(req.body.fromPages) : [parseInt(req.body.fromPage) || 1];
         const toPages   = req.body.toPages   ? JSON.parse(req.body.toPages)   : [parseInt(req.body.toPage)   || 999];
@@ -234,7 +234,7 @@ router.post(
 
         contentItems.push({
           type: 'text',
-          text: `Based on all the document content above, generate ${n} ${difficulty} exam questions.${topic ? ` Topic: ${topic}.` : ''}`,
+          text: `Based on all the document content above, generate ${n} ${difficulty} exam questions.${topic ? ` Topic: ${topic}.` : ''}${instructions ? ` Additional instructions: ${instructions}` : ''}`,
         });
 
         const aiRes     = await callClaude([{ role: 'user', content: contentItems }], buildGenerateSystem(n, difficulty, subject, topic, gradeLevel));
@@ -307,7 +307,7 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
     if (totalSize > 10 * 1024 * 1024)
       return res.status(400).json({ error: 'validation_error', message: 'Total size must be under 10 MB.' });
 
-    const { subject, topic, gradeLevel, difficulty = 'medium', count = 10 } = req.body;
+    const { subject, topic, gradeLevel, difficulty = 'medium', count = 10, instructions = '' } = req.body;
     const n = Math.min(Math.max(parseInt(count) || 10, 1), 50);
 
     // If any file is a PDF, route it through the scanned helper
@@ -332,7 +332,7 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
       role: 'user',
       content: [
         ...files.map(f => ({ type: 'image', source: { type: 'base64', media_type: f.mimetype, data: f.buffer.toString('base64') } })),
-        { type: 'text', text: `These are ${files.length} image(s) from a ${subject || 'subject'} resource. Generate ${n} ${difficulty} exam questions from the content across all these images.${topic ? ` Topic: ${topic}.` : ''}` },
+        { type: 'text', text: `These are ${files.length} image(s) from a ${subject || 'subject'} resource. Generate ${n} ${difficulty} exam questions from the content across all these images.${topic ? ` Topic: ${topic}.` : ''}${instructions ? ` Additional instructions: ${instructions}` : ''}` },
       ],
     }], system);
 
@@ -345,5 +345,81 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
     res.json({ questions, usage: { used, limit: req.aiRemaining !== undefined ? used + req.aiRemaining : null } });
   } catch (err) { next(err); }
 });
+
+// ── POST /api/v1/ai/import-paper ─────────────────────────────────────────────
+// Convert a scanned/photographed exam paper into electronic GradiSpace questions.
+// Pro+ only. Accepts up to 10 images (JPEG/PNG) and/or up to 3 PDFs.
+router.post(
+  '/import-paper',
+  requireAuth,
+  requirePlan('pro', 'school'),
+  upload.fields([{ name: 'images', maxCount: 10 }, { name: 'pdfs', maxCount: 3 }]),
+  async (req, res, next) => {
+    try {
+      const images = req.files?.images || [];
+      const pdfs   = req.files?.pdfs   || [];
+      if (!images.length && !pdfs.length) {
+        return res.status(400).json({ error: 'validation_error', message: 'No files uploaded.' });
+      }
+
+      for (const f of images) {
+        if (f.size > 2 * 1024 * 1024)
+          return res.status(400).json({ error: 'validation_error', message: `${f.originalname}: images must be under 2 MB each.` });
+      }
+
+      const { subject = '', gradeLevel = '', instructions = '' } = req.body;
+
+      const system = `You are converting a physical exam paper into electronic format.
+Your task is to EXTRACT and PRESERVE the exact questions from this exam paper.
+Do NOT generate new questions — only extract what is already there.
+
+Subject: ${subject || 'Not specified'}
+Grade Level: ${gradeLevel || 'Not specified'}
+Teacher instructions: ${instructions || 'None'}
+
+For each question found:
+- Preserve the exact question text and numbering
+- Identify the question type: "mcq" or "short_answer"
+- Extract all answer options exactly as written
+- If correct answers are visible on the paper, include them
+- If it is a matching/grid question (e.g. "match the person to the statement"), convert each row to an individual MCQ where the column headers become the answer options (A, B, C...)
+- Preserve any reading passages or stimulus blocks as a passage object linked to related questions
+- Mark any question you are uncertain about with "_uncertain": true
+
+Return ONLY a valid JSON array:
+[{
+  "type": "mcq",
+  "stem": "exact question text",
+  "options": [{"letter": "A", "text": "..."}, {"letter": "B", "text": "..."}, {"letter": "C", "text": "..."}],
+  "answer": "A",
+  "passage": {"title": "...", "text": "..."},
+  "_uncertain": false
+}]
+Omit "passage" if not present. For short_answer omit "options". No markdown, no explanation, only the JSON array.`;
+
+      const contentItems = [];
+
+      for (const f of images) {
+        const mt = f.mimetype === 'image/jpg' ? 'image/jpeg' : f.mimetype;
+        contentItems.push({ type: 'image', source: { type: 'base64', media_type: mt, data: f.buffer.toString('base64') } });
+      }
+
+      for (const f of pdfs) {
+        contentItems.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.buffer.toString('base64') } });
+      }
+
+      contentItems.push({ type: 'text', text: 'Extract all questions from this exam paper exactly as they appear. Return only the JSON array.' });
+
+      const aiRes     = await callClaude([{ role: 'user', content: contentItems }], system);
+      const raw       = aiRes.content?.[0]?.text || '';
+      const questions = salvageJSON(raw);
+
+      await incrementAiUsage(req.teacherId);
+      const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
+      const used = rows[0]?.ai_usage_month || 0;
+      res.json({ questions, usage: { used, limit: null } });
+    } catch (err) { next(err); }
+  }
+);
 
 module.exports = router;

@@ -4,7 +4,7 @@ import {
   PlusIcon, TrashIcon, ArrowUpIcon, ArrowDownIcon,
   SparklesIcon, DocumentArrowUpIcon, CircleStackIcon,
   PencilSquareIcon, CheckIcon, XMarkIcon, ClipboardDocumentIcon,
-  PrinterIcon,
+  PrinterIcon, DocumentMagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -412,6 +412,7 @@ export default function ExamBuilder() {
   const [aiCount, setAiCount]       = useState(10);
   const [aiDiff, setAiDiff]         = useState('medium');
   const [aiPassage, setAiPassage]   = useState(false);
+  const [aiInstructions, setAiInstructions] = useState('');
   const [aiLoading, setAiLoading]   = useState(false);
   const [aiResults, setAiResults]   = useState([]);
   const [aiSel, setAiSel]           = useState(new Set());
@@ -428,6 +429,12 @@ export default function ExamBuilder() {
     return () => urls.forEach(u => URL.revokeObjectURL(u));
   }, [aiImgFiles]);
 
+  useEffect(() => {
+    const urls = importPaperImgFiles.map(f => URL.createObjectURL(f));
+    setImportPaperImgPreviews(urls);
+    return () => urls.forEach(u => URL.revokeObjectURL(u));
+  }, [importPaperImgFiles]);
+
   // ── PDF tab state ─────────────────────────────────────────────────────────
   const pdfInputRef                     = useRef(null);
   const [pdfFileName, setPdfFileName]   = useState('');
@@ -443,6 +450,18 @@ export default function ExamBuilder() {
   const [bankPage, setBankPage]           = useState(1);
   const [bankTotal, setBankTotal]         = useState(0);
   const bankTimer                         = useRef(null);
+
+  // ── Import Paper tab state ────────────────────────────────────────────────
+  const importPaperInputRef                               = useRef(null);
+  const [importPaperImgFiles, setImportPaperImgFiles]     = useState([]);
+  const [importPaperPdfFiles, setImportPaperPdfFiles]     = useState([]);
+  const [importPaperImgPreviews, setImportPaperImgPreviews] = useState([]);
+  const [importPaperInstructions, setImportPaperInstructions] = useState('');
+  const [importPaperSubject, setImportPaperSubject]       = useState('');
+  const [importPaperGrade, setImportPaperGrade]           = useState('');
+  const [importPaperLoading, setImportPaperLoading]       = useState(false);
+  const [importPaperResults, setImportPaperResults]       = useState([]);
+  const [importPaperSel, setImportPaperSel]               = useState(new Set());
 
   // ── Load exam when editing ────────────────────────────────────────────────
   useEffect(() => {
@@ -572,7 +591,9 @@ export default function ExamBuilder() {
     setAiResults([]);
     try {
       const { questions: qs } = await api.post('/ai/generate', {
-        content:        aiPrompt,
+        content:        aiInstructions.trim()
+                          ? `${aiPrompt}\n\nAdditional instructions: ${aiInstructions.trim()}`
+                          : aiPrompt,
         subject:        aiSubject || subject,
         topic,
         gradeLevel,
@@ -624,6 +645,7 @@ export default function ExamBuilder() {
       fd.append('subject', aiSubject || subject || '');
       fd.append('topic', topic || '');
       fd.append('gradeLevel', gradeLevel || '');
+      fd.append('instructions', aiInstructions || '');
       const { questions: qs } = await api.upload('/ai/from-image', fd);
       const normalized = qs.map(q => ({
         id: null, stem: q.stem,
@@ -660,6 +682,7 @@ export default function ExamBuilder() {
       fd.append('subject', aiSubject || subject || '');
       fd.append('topic', topic || '');
       fd.append('gradeLevel', gradeLevel || '');
+      fd.append('instructions', aiInstructions || '');
       const { questions: qs } = await api.upload('/ai/import-pdf', fd);
       const normalized = qs.map(q => ({
         id: null, stem: q.stem,
@@ -713,6 +736,47 @@ export default function ExamBuilder() {
     addManyToExam(sel);
     setPdfResults([]); setPdfSel(new Set());
     toast(`${sel.length} questions added.`, 'success');
+  }
+
+  // ── Import Paper: convert + add ───────────────────────────────────────────
+  async function handleImportPaper() {
+    if (!importPaperImgFiles.length && !importPaperPdfFiles.length) {
+      toast('Upload at least one file.', 'error'); return;
+    }
+    if (!isPro) { navigate('/billing'); return; }
+    setImportPaperLoading(true); setImportPaperResults([]);
+    try {
+      const fd = new FormData();
+      importPaperImgFiles.forEach(f => fd.append('images', f));
+      importPaperPdfFiles.forEach(f => fd.append('pdfs', f));
+      fd.append('instructions', importPaperInstructions || '');
+      fd.append('subject', importPaperSubject || subject || '');
+      fd.append('gradeLevel', importPaperGrade || gradeLevel || '');
+      const { questions: qs } = await api.upload('/ai/import-paper', fd);
+      const normalized = qs.map(q => ({
+        id: null, stem: q.stem,
+        options: q.options || [],
+        answer: q.answer || '',
+        type: q.type || 'mcq',
+        difficulty: 'medium',
+        passage: q.passage || null,
+        _source: 'ai',
+        _uncertain: q._uncertain || false,
+      }));
+      setImportPaperResults(normalized);
+      setImportPaperSel(new Set(normalized.map((_, i) => i)));
+      toast(`Found ${normalized.length} question${normalized.length !== 1 ? 's' : ''} in this paper.`, 'success');
+    } catch (err) {
+      toast(err.message || 'Paper import failed.', 'error');
+    } finally { setImportPaperLoading(false); }
+  }
+
+  function addImportPaperSelected() {
+    const sel = importPaperResults.filter((_, i) => importPaperSel.has(i));
+    if (!sel.length) return;
+    addManyToExam(sel);
+    setImportPaperResults([]); setImportPaperSel(new Set());
+    toast(`${sel.length} question${sel.length !== 1 ? 's' : ''} added to exam.`, 'success');
   }
 
   // ── Bank: add ────────────────────────────────────────────────────────────
@@ -1013,10 +1077,11 @@ export default function ExamBuilder() {
             {/* Tab bar */}
             <div className="flex border-b border-slate-200 overflow-x-auto">
               {[
-                { key: 'manual', label: 'Manual',        icon: PencilSquareIcon },
-                { key: 'ai',     label: 'AI Generate',   icon: SparklesIcon },
-                { key: 'pdf',    label: 'Import PDF',    icon: DocumentArrowUpIcon },
-                { key: 'bank',   label: 'Question Bank', icon: CircleStackIcon },
+                { key: 'manual',       label: 'Manual',        icon: PencilSquareIcon },
+                { key: 'ai',           label: 'AI Generate',   icon: SparklesIcon },
+                { key: 'import_paper', label: 'Import Paper',  icon: DocumentMagnifyingGlassIcon },
+                { key: 'pdf',          label: 'Import PDF',    icon: DocumentArrowUpIcon },
+                { key: 'bank',         label: 'Question Bank', icon: CircleStackIcon },
               ].map(({ key, label, icon: Icon }) => (
                 <button key={key} onClick={() => setActiveTab(key)}
                   className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors flex-shrink-0
@@ -1299,6 +1364,13 @@ export default function ExamBuilder() {
                         <span className="text-sm text-slate-600">Include a reading passage with each question</span>
                       </label>
 
+                      <div>
+                        <label className="label">Additional instructions <span className="text-slate-400 font-normal">(optional)</span></label>
+                        <textarea className="input resize-none text-sm" rows={2}
+                          value={aiInstructions} onChange={e => setAiInstructions(e.target.value)}
+                          placeholder="e.g. 'Focus on vocabulary', 'Use a formal tone', 'Avoid questions about dates'" />
+                      </div>
+
                       <button onClick={handleAiGenerate} disabled={aiLoading} className="btn-primary w-full">
                         {aiLoading
                           ? <><Spinner className="w-4 h-4 mr-2" /> Generating…</>
@@ -1377,6 +1449,13 @@ export default function ExamBuilder() {
                             <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
                               placeholder={subject || 'Uses exam subject'} />
                           </div>
+                        </div>
+
+                        <div>
+                          <label className="label">Additional instructions <span className="text-slate-400 font-normal">(optional)</span></label>
+                          <textarea className="input resize-none text-sm" rows={2}
+                            value={aiInstructions} onChange={e => setAiInstructions(e.target.value)}
+                            placeholder="e.g. 'Focus on vocabulary', 'Use a formal tone', 'Avoid questions about dates'" />
                         </div>
 
                         <button onClick={handleAiFromImage}
@@ -1476,6 +1555,13 @@ export default function ExamBuilder() {
                             <input className="input" value={aiSubject} onChange={e => setAiSubject(e.target.value)}
                               placeholder={subject || 'Uses exam subject'} />
                           </div>
+                        </div>
+
+                        <div>
+                          <label className="label">Additional instructions <span className="text-slate-400 font-normal">(optional)</span></label>
+                          <textarea className="input resize-none text-sm" rows={2}
+                            value={aiInstructions} onChange={e => setAiInstructions(e.target.value)}
+                            placeholder="e.g. 'Focus on vocabulary', 'Use a formal tone', 'Avoid questions about dates'" />
                         </div>
 
                         <button onClick={handleAiFromPdf}
@@ -1606,6 +1692,178 @@ export default function ExamBuilder() {
                   )}
                 </div>
               )}
+
+              {/* ── Import Paper tab ── */}
+              {activeTab === 'import_paper' && (() => {
+                const addPaperFiles = newFiles => {
+                  const newImgs = newFiles.filter(f => f.type !== 'application/pdf');
+                  const newPdfs = newFiles.filter(f => f.type === 'application/pdf');
+                  const badImg  = newImgs.find(f => f.size > 2 * 1024 * 1024);
+                  if (badImg) { toast(`${badImg.name}: images must be under 2 MB.`, 'error'); return; }
+                  const totalImgs = importPaperImgFiles.length + newImgs.length;
+                  const totalPdfs = importPaperPdfFiles.length + newPdfs.length;
+                  if (totalImgs > 10) { toast('Maximum 10 images.', 'error'); return; }
+                  if (totalPdfs > 3)  { toast('Maximum 3 PDFs.', 'error'); return; }
+                  if (newImgs.length) setImportPaperImgFiles(prev => [...prev, ...newImgs].slice(0, 10));
+                  if (newPdfs.length) setImportPaperPdfFiles(prev => [...prev, ...newPdfs].slice(0, 3));
+                  setImportPaperResults([]); setImportPaperSel(new Set());
+                };
+                const totalFiles = importPaperImgFiles.length + importPaperPdfFiles.length;
+                const totalSize  = [...importPaperImgFiles, ...importPaperPdfFiles].reduce((s, f) => s + f.size, 0);
+                return (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-800">Convert a paper exam to electronic format</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">Upload a scanned or photographed exam paper — AI will read it and convert all questions to GradiSpace format</p>
+                    </div>
+
+                    {/* Drop zone */}
+                    <div
+                      className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                      onClick={() => importPaperInputRef.current?.click()}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={e => { e.preventDefault(); addPaperFiles(Array.from(e.dataTransfer.files)); }}>
+                      <DocumentMagnifyingGlassIcon className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                      <p className="text-sm text-slate-500">Drop exam paper images or PDFs here, or click to browse</p>
+                      <p className="text-xs text-slate-400 mt-1">JPG, PNG, PDF · Up to 10 images or 3 PDFs · 2 MB per image</p>
+                      <input ref={importPaperInputRef} type="file"
+                        accept=".jpg,.jpeg,.png,image/jpeg,image/png,application/pdf,.pdf"
+                        multiple className="hidden"
+                        onChange={e => { addPaperFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
+                    </div>
+
+                    {/* File list */}
+                    {totalFiles > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-slate-600">
+                            {totalFiles} file{totalFiles > 1 ? 's' : ''} · {fmtSize(totalSize)}
+                          </span>
+                          <button onClick={() => {
+                            setImportPaperImgFiles([]); setImportPaperPdfFiles([]);
+                            if (importPaperInputRef.current) importPaperInputRef.current.value = '';
+                          }} className="text-xs text-slate-400 hover:text-red-500 transition-colors">Clear all</button>
+                        </div>
+                        {importPaperImgFiles.length > 0 && (
+                          <div className="grid grid-cols-5 gap-2">
+                            {importPaperImgFiles.map((f, i) => (
+                              <div key={i} className="relative group">
+                                <img src={importPaperImgPreviews[i]} alt={f.name}
+                                  className="w-full h-16 object-cover rounded border border-slate-200" />
+                                <p className="text-xs text-slate-400 truncate mt-0.5">{f.name}</p>
+                                <button
+                                  onClick={() => setImportPaperImgFiles(prev => prev.filter((_, j) => j !== i))}
+                                  className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center leading-none">
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {importPaperPdfFiles.map((f, i) => (
+                          <div key={i} className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50">
+                            <DocumentArrowUpIcon className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-slate-700 truncate">{f.name}</p>
+                              <p className="text-xs text-slate-400">{fmtSize(f.size)}</p>
+                            </div>
+                            <button onClick={() => setImportPaperPdfFiles(prev => prev.filter((_, j) => j !== i))}
+                              className="text-slate-400 hover:text-red-500 transition-colors flex-shrink-0">
+                              <XMarkIcon className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Subject + Grade */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="label">Subject</label>
+                        <input className="input" value={importPaperSubject}
+                          onChange={e => setImportPaperSubject(e.target.value)}
+                          placeholder={subject || 'e.g. English'} />
+                      </div>
+                      <div>
+                        <label className="label">Grade Level</label>
+                        <input className="input" value={importPaperGrade}
+                          onChange={e => setImportPaperGrade(e.target.value)}
+                          placeholder={gradeLevel || 'e.g. Grade 10'} />
+                      </div>
+                    </div>
+
+                    {/* Instructions */}
+                    <div>
+                      <label className="label">Instructions <span className="text-slate-400 font-normal">(optional)</span></label>
+                      <textarea className="input resize-none text-sm" rows={3}
+                        value={importPaperInstructions} onChange={e => setImportPaperInstructions(e.target.value)}
+                        placeholder={`Optional instructions — e.g. 'This is a Cambridge B1 exam', 'Questions 7-13 are matching format', 'Preserve the exact wording'`} />
+                    </div>
+
+                    {!isPro && (
+                      <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <span className="text-xs text-amber-700 flex-1">Import Paper requires a Pro plan.</span>
+                        <button onClick={() => navigate('/billing')} className="btn-primary btn-sm text-xs">Upgrade to Pro</button>
+                      </div>
+                    )}
+
+                    <button onClick={handleImportPaper}
+                      disabled={importPaperLoading || totalFiles === 0}
+                      className="btn-primary w-full">
+                      {importPaperLoading
+                        ? <><Spinner className="w-4 h-4 mr-2 flex-shrink-0" /> Reading exam paper and converting questions — this may take 30–60 seconds…</>
+                        : <><DocumentMagnifyingGlassIcon className="w-4 h-4 mr-1.5" /> Convert to Electronic Format</>}
+                    </button>
+
+                    {/* Results */}
+                    {importPaperResults.length > 0 && (
+                      <div className="space-y-2 pt-2 border-t border-slate-200">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-slate-700">
+                            Found {importPaperResults.length} question{importPaperResults.length !== 1 ? 's' : ''} in this paper
+                          </span>
+                          <div className="flex gap-3">
+                            <button onClick={() => setImportPaperSel(new Set(importPaperResults.map((_, i) => i)))}
+                              className="text-xs text-primary-600 hover:underline">All</button>
+                            <button onClick={() => setImportPaperSel(new Set())}
+                              className="text-xs text-slate-400 hover:underline">None</button>
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                          {importPaperResults.map((q, i) => (
+                            <label key={i}
+                              className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer
+                                ${q._uncertain ? 'border-amber-300 bg-amber-50' : 'border-slate-200 hover:border-primary-200'}`}>
+                              <input type="checkbox" className="mt-0.5 text-primary-600 rounded flex-shrink-0"
+                                checked={importPaperSel.has(i)}
+                                onChange={e => {
+                                  const next = new Set(importPaperSel);
+                                  e.target.checked ? next.add(i) : next.delete(i);
+                                  setImportPaperSel(next);
+                                }} />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm text-slate-800 line-clamp-2">{q.stem}</p>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  {q.answer && <span className="text-xs text-slate-400">Ans: {q.answer}</span>}
+                                  {q._uncertain && (
+                                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                                      Review needed
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                        <button onClick={addImportPaperSelected} disabled={importPaperSel.size === 0}
+                          className="btn-primary w-full">
+                          Add {importPaperSel.size} Selected to Exam
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* ── Bank tab ── */}
               {activeTab === 'bank' && (

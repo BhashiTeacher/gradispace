@@ -41,15 +41,16 @@ router.get('/', requireAuth, async (req, res, next) => {
 // POST /api/v1/exams
 router.post('/', requireAuth, checkExamLimit, async (req, res, next) => {
   try {
-    const { title, subject, topic, gradeLevel, duration, description, examType = 'open', questions = [] } = req.body;
+    const { title, subject, topic, gradeLevel, duration, description, examType = 'open', resultView, questions = [] } = req.body;
     if (!title) return res.status(400).json({ error: 'validation_error', message: 'title is required.' });
 
     const client = await db.getClient();
     try {
       await client.query('BEGIN');
       const { rows } = await client.query(
-        'INSERT INTO exams(teacher_id,title,subject,topic,grade_level,duration,description,exam_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
-        [req.teacherId, title, subject, topic, gradeLevel, duration || 45, description, examType]
+        'INSERT INTO exams(teacher_id,title,subject,topic,grade_level,duration,description,exam_type,result_view) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+        [req.teacherId, title, subject, topic, gradeLevel, duration || 45, description, examType,
+         resultView === 'detailed' ? 'detailed' : 'summary']
       );
       const exam = rows[0];
 

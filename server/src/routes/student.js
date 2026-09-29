@@ -106,7 +106,7 @@ router.post('/exam/:token/submit', async (req, res, next) => {
     if (!sessionToken) return res.status(400).json({ error: 'validation_error', message: 'sessionToken is required.' });
 
     const { rows: sRows } = await db.query(
-      `SELECT s.*, e.id AS eid,
+      `SELECT s.*, e.id AS eid, e.result_view,
               t.portal_title, t.brand_colour, t.banner_image, t.profile_photo,
               t.welcome_message, t.footer_message, t.locale, t.exam_display_mode
        FROM submissions s
@@ -168,7 +168,12 @@ router.post('/exam/:token/submit', async (req, res, next) => {
     `, [JSON.stringify(answers), correct, total, pct, grade, timeTaken, JSON.stringify(breakdown), requiresReview, sessionToken]);
 
     res.json({
-      result: { correct, total, pct, grade, timeTaken, breakdown, answers: answerDetail, requiresReview },
+      result: {
+        correct, total, pct, grade, timeTaken, breakdown, requiresReview,
+        resultView: sub.result_view || 'summary',
+        // Per-question answers (incl. correct answers) are only revealed in detailed mode
+        answers: sub.result_view === 'detailed' ? answerDetail : undefined,
+      },
       branding: {
         portalName:      sub.portal_title    || null,
         brandColour:     sub.brand_colour    || '#4F46E5',

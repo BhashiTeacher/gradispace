@@ -59,20 +59,39 @@ async function incrementAiUsage(teacherId) {
   await db.query('UPDATE teachers SET ai_usage_month=ai_usage_month+1 WHERE id=$1', [teacherId]);
 }
 
+// ── Question type counts ──────────────────────────────────────────────────────
+const MAX_GENERATE = 20;
+
+// Parse mcqCount/saCount from a request body. Zero is a real value ("none of this
+// type"), so it must not collapse to undefined. Returns null when no counts given.
+function parseTypeCounts(body) {
+  const mq = Math.max(parseInt(body.mcqCount) || 0, 0);
+  const sq = Math.max(parseInt(body.saCount)  || 0, 0);
+  if (mq + sq === 0) return null;
+  const saCount  = Math.min(sq, MAX_GENERATE);
+  const mcqCount = Math.min(mq, MAX_GENERATE - saCount);
+  return { mcqCount, saCount };
+}
+
+function buildTypeSpec(n, difficulty, counts) {
+  if (!counts) return `Generate exactly ${n} questions at ${difficulty} difficulty.`;
+  const { mcqCount, saCount } = counts;
+  return `Generate exactly ${mcqCount} multiple choice questions (MCQ) and exactly ${saCount} short answer questions at ${difficulty} difficulty.
+${saCount === 0 ? 'Do NOT generate any short answer questions. MCQ ONLY.' : ''}
+${mcqCount === 0 ? 'Do NOT generate any MCQ questions. Short answer ONLY.' : ''}
+Total questions to generate: ${mcqCount + saCount}
+
+Each question must have a "type" field:
+- MCQ questions: type = "mcq", must have an options array with A/B/C/D and an answer letter
+- Short answer questions: type = "short_answer", no options, just stem and a short model answer in "answer"
+
+IMPORTANT: Return EXACTLY ${mcqCount} "mcq" type and EXACTLY ${saCount} "short_answer" type. No exceptions.`;
+}
+
 // ── Generate system prompt ────────────────────────────────────────────────────
-function buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mcqCount, saCount) {
-  let typeSpec;
-  const hasCounts = (mcqCount !== undefined && saCount !== undefined);
-  if (hasCounts && (mcqCount + saCount) > 0) {
-    const parts = [];
-    if (mcqCount > 0) parts.push(`${mcqCount} multiple choice (MCQ)`);
-    if (saCount   > 0) parts.push(`${saCount} short answer`);
-    typeSpec = `Generate exactly ${parts.join(' and ')} questions at ${difficulty} difficulty.`;
-  } else {
-    typeSpec = `Generate exactly ${n} questions at ${difficulty} difficulty.`;
-  }
+function buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, counts = null) {
   return `You are an expert exam question writer for ${subject || 'general'} at ${gradeLevel || 'school'} level.
-${typeSpec}
+${buildTypeSpec(n, difficulty, counts)}
 Return ONLY a valid JSON array:
 [{
   "type": "mcq" | "short_answer",
@@ -86,17 +105,66 @@ Return ONLY a valid JSON array:
   "topic": "${topic || ''}",
   "difficulty": "${difficulty}"
 }]
-For MCQ include all 4 options and the correct answer letter. For short_answer omit options and answer. No markdown, no explanation, just the JSON array.`;
+For mcq include all 4 options and the correct answer letter. For short_answer omit options and give a brief model answer. No markdown, no explanation, just the JSON array.`;
+}
+
+function normalizeType(q) {
+  const t = String(q.type || '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (t === 'short_answer' || t === 'sa' || t === 'short') return 'short_answer';
+  if (t === 'mcq' || t === 'multiple_choice') return 'mcq';
+  return Array.isArray(q.options) && q.options.length >= 2 ? 'mcq' : 'short_answer';
+}
+
+// Split generated questions by type and trim any excess beyond the requested counts.
+function applyTypeCounts(questions, counts) {
+  const mcq = [], sa = [];
+  for (const q of questions) {
+    const type = normalizeType(q);
+    if (type === 'mcq') mcq.push({ ...q, type });
+    else { const { options: _o, ...rest } = q; sa.push({ ...rest, type }); }
+  }
+  return { mcq: mcq.slice(0, counts.mcqCount), sa: sa.slice(0, counts.saCount) };
+}
+
+// Call Claude and guarantee the returned MCQ/short-answer split matches `counts`:
+// excess questions of a type are dropped, and a shortfall triggers one top-up call.
+async function generateQuestions(content, { n, difficulty, subject, topic, gradeLevel, counts }) {
+  const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, counts);
+  const aiRes  = await callClaude([{ role: 'user', content }], system);
+  const first  = salvageJSON(aiRes.content?.[0]?.text || '');
+  if (!counts) return first;
+
+  let { mcq, sa } = applyTypeCounts(first, counts);
+  const missing = { mcqCount: counts.mcqCount - mcq.length, saCount: counts.saCount - sa.length };
+  if (missing.mcqCount > 0 || missing.saCount > 0) {
+    console.log('[AI] Type count shortfall, topping up:', missing);
+    const existing = [...mcq, ...sa].map(q => `- ${q.stem}`).join('\n');
+    const topUpContent = [
+      ...(Array.isArray(content) ? content : [{ type: 'text', text: content }]),
+      { type: 'text', text: `Generate additional, different questions. Do not repeat any of these:\n${existing}` },
+    ];
+    const topUpSystem = buildGenerateSystem(missing.mcqCount + missing.saCount, difficulty, subject, topic, gradeLevel, missing);
+    try {
+      const extraRes = await callClaude([{ role: 'user', content: topUpContent }], topUpSystem);
+      const extra    = applyTypeCounts(salvageJSON(extraRes.content?.[0]?.text || ''), missing);
+      mcq = mcq.concat(extra.mcq);
+      sa  = sa.concat(extra.sa);
+    } catch (err) {
+      console.log('[AI] Top-up failed:', err.message);
+    }
+  }
+  return [...mcq, ...sa];
 }
 
 // ── Scanned PDF helper ────────────────────────────────────────────────────────
 // Converts up to 5 pages to PNG via pdf2pic (needs ImageMagick+Ghostscript).
 // Falls back to Claude's native document API if conversion fails.
-async function generateFromScannedPdf({ buffer, fromPage, toPage, totalPages, n, difficulty, subject, topic, gradeLevel }) {
+async function generateFromScannedPdf({ buffer, fromPage, toPage, totalPages, n, difficulty, subject, topic, gradeLevel, counts }) {
   const effectiveTo = Math.min(toPage, totalPages, fromPage + 4);
   const pageLabel   = `pages ${fromPage}–${effectiveTo}`;
-  const system      = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel);
+  const opts        = { n, difficulty, subject, topic, gradeLevel, counts };
 
+  let content;
   try {
     const { fromBuffer } = require('pdf2pic');
     const convert = fromBuffer(buffer, { density: 150, format: 'png', width: 1200, height: 1600 });
@@ -109,42 +177,29 @@ async function generateFromScannedPdf({ buffer, fromPage, toPage, totalPages, n,
     if (!pageImages.length) throw new Error('pdf2pic returned no images');
 
     console.log('[PDF] Vision: converted', pageImages.length, 'pages to PNG');
-    const aiRes = await callClaude([{
-      role: 'user',
-      content: [
-        ...pageImages.map(b64 => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } })),
-        { type: 'text', text: `Generate ${n} ${difficulty} exam questions from these ${pageImages.length} scanned page(s) (${pageLabel}).${topic ? ` Topic: ${topic}.` : ''}` },
-      ],
-    }], system);
-    return aiRes.content?.[0]?.text || '';
+    content = [
+      ...pageImages.map(b64 => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } })),
+      { type: 'text', text: `Generate ${n} ${difficulty} exam questions from these ${pageImages.length} scanned page(s) (${pageLabel}).${topic ? ` Topic: ${topic}.` : ''}` },
+    ];
   } catch (convErr) {
     console.log('[PDF] pdf2pic unavailable:', convErr.message, '→ Claude document API');
-    const base64 = buffer.toString('base64');
-    const aiRes = await callClaude([{
-      role: 'user',
-      content: [
-        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-        { type: 'text', text: `Generate ${n} ${difficulty} exam questions from ${pageLabel} of this scanned document.${topic ? ` Topic: ${topic}.` : ''}` },
-      ],
-    }], system);
-    return aiRes.content?.[0]?.text || '';
+    content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+      { type: 'text', text: `Generate ${n} ${difficulty} exam questions from ${pageLabel} of this scanned document.${topic ? ` Topic: ${topic}.` : ''}` },
+    ];
   }
+  return generateQuestions(content, opts);
 }
 
 // ── POST /api/v1/ai/generate ──────────────────────────────────────────────────
 router.post('/generate', requireAuth, checkAiLimit, async (req, res, next) => {
   try {
-    const { content, subject, topic, gradeLevel, difficulty = 'medium', count = 10, mcqCount, saCount } = req.body;
+    const { content, subject, topic, gradeLevel, difficulty = 'medium', count = 10 } = req.body;
     if (!content) return res.status(400).json({ error: 'validation_error', message: 'content is required.' });
 
-    const mq = parseInt(mcqCount) || 0;
-    const sq = parseInt(saCount)  || 0;
-    const n  = (mq + sq) > 0 ? Math.min(mq + sq, 20) : Math.min(Math.max(parseInt(count) || 10, 1), 50);
-    const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mq || undefined, sq || undefined);
-
-    const aiRes    = await callClaude([{ role: 'user', content }], system);
-    const raw      = aiRes.content?.[0]?.text || '';
-    const questions = salvageJSON(raw);
+    const counts = parseTypeCounts(req.body);
+    const n      = counts ? counts.mcqCount + counts.saCount : Math.min(Math.max(parseInt(count) || 10, 1), 50);
+    const questions = await generateQuestions(content, { n, difficulty, subject, topic, gradeLevel, counts });
 
     await incrementAiUsage(req.teacherId);
     const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
@@ -174,9 +229,8 @@ router.post(
         if (totalSize > 20 * 1024 * 1024) return res.status(400).json({ error: 'validation_error', message: 'Total PDF size must be under 20 MB.' });
 
         const { difficulty = 'medium', subject, topic, gradeLevel, instructions = '' } = req.body;
-        const mq = parseInt(req.body.mcqCount) || 0;
-        const sq = parseInt(req.body.saCount)  || 0;
-        const n  = (mq + sq) > 0 ? Math.min(mq + sq, 20) : Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
+        const counts = parseTypeCounts(req.body);
+        const n      = counts ? counts.mcqCount + counts.saCount : Math.min(Math.max(parseInt(req.body.count) || 10, 1), 50);
         const fromPages = req.body.fromPages ? JSON.parse(req.body.fromPages) : [parseInt(req.body.fromPage) || 1];
         const toPages   = req.body.toPages   ? JSON.parse(req.body.toPages)   : [parseInt(req.body.toPage)   || 999];
 
@@ -236,9 +290,7 @@ router.post(
           text: `Based on all the document content above, generate ${n} ${difficulty} exam questions.${topic ? ` Topic: ${topic}.` : ''}${instructions ? ` Additional instructions: ${instructions}` : ''}`,
         });
 
-        const aiRes     = await callClaude([{ role: 'user', content: contentItems }], buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mq || undefined, sq || undefined));
-        const raw       = aiRes.content?.[0]?.text || '';
-        const questions = salvageJSON(raw);
+        const questions = await generateQuestions(contentItems, { n, difficulty, subject, topic, gradeLevel, counts });
 
         await incrementAiUsage(req.teacherId);
         const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
@@ -307,20 +359,18 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
       return res.status(400).json({ error: 'validation_error', message: 'Total size must be under 10 MB.' });
 
     const { subject, topic, gradeLevel, difficulty = 'medium', count = 10, instructions = '' } = req.body;
-    const mq = parseInt(req.body.mcqCount) || 0;
-    const sq = parseInt(req.body.saCount)  || 0;
-    const n  = (mq + sq) > 0 ? Math.min(mq + sq, 20) : Math.min(Math.max(parseInt(count) || 10, 1), 50);
+    const counts = parseTypeCounts(req.body);
+    const n      = counts ? counts.mcqCount + counts.saCount : Math.min(Math.max(parseInt(count) || 10, 1), 50);
 
     // If any file is a PDF, route it through the scanned helper
     const pdfFile = files.find(f => f.mimetype === 'application/pdf');
     if (pdfFile) {
-      const textScan = await pdfParse(pdfFile.buffer);
-      const raw       = await generateFromScannedPdf({
+      const textScan  = await pdfParse(pdfFile.buffer);
+      const questions = await generateFromScannedPdf({
         buffer: pdfFile.buffer,
         fromPage: 1, toPage: 5, totalPages: textScan.numpages,
-        n, difficulty, subject, topic, gradeLevel,
+        n, difficulty, subject, topic, gradeLevel, counts,
       });
-      const questions = salvageJSON(raw);
       await incrementAiUsage(req.teacherId);
       const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);
       const used = rows[0]?.ai_usage_month || 0;
@@ -328,17 +378,10 @@ router.post('/from-image', requireAuth, checkAiLimit, upload.array('images', 10)
     }
 
     // All images — send in one Claude Vision request
-    const system = buildGenerateSystem(n, difficulty, subject, topic, gradeLevel, mq || undefined, sq || undefined);
-    const aiRes = await callClaude([{
-      role: 'user',
-      content: [
-        ...files.map(f => ({ type: 'image', source: { type: 'base64', media_type: f.mimetype, data: f.buffer.toString('base64') } })),
-        { type: 'text', text: `These are ${files.length} image(s) from a ${subject || 'subject'} resource. Generate ${n} ${difficulty} exam questions from the content across all these images.${topic ? ` Topic: ${topic}.` : ''}${instructions ? ` Additional instructions: ${instructions}` : ''}` },
-      ],
-    }], system);
-
-    const raw       = aiRes.content?.[0]?.text || '';
-    const questions = salvageJSON(raw);
+    const questions = await generateQuestions([
+      ...files.map(f => ({ type: 'image', source: { type: 'base64', media_type: f.mimetype, data: f.buffer.toString('base64') } })),
+      { type: 'text', text: `These are ${files.length} image(s) from a ${subject || 'subject'} resource. Generate ${n} ${difficulty} exam questions from the content across all these images.${topic ? ` Topic: ${topic}.` : ''}${instructions ? ` Additional instructions: ${instructions}` : ''}` },
+    ], { n, difficulty, subject, topic, gradeLevel, counts });
 
     await incrementAiUsage(req.teacherId);
     const { rows } = await db.query('SELECT ai_usage_month FROM teachers WHERE id=$1', [req.teacherId]);

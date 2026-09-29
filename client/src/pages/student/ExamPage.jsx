@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { ExclamationCircleIcon, CheckCircleIcon, ClockIcon } from '@heroicons/react/24/outline';
+import { ExclamationCircleIcon, ClockIcon } from '@heroicons/react/24/outline';
 import Spinner from '../../components/UI/Spinner';
 
 const _apiHost = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '').replace(/\/api\/v1$/, '');
@@ -284,6 +284,10 @@ export default function ExamPage() {
   const colour    = branding?.brandColour || '#4F46E5';
   const locale    = branding?.locale || 'en';
   const t         = T[locale] || T.en;
+  // Submit response carries the authoritative result view; fall back to the loaded exam
+  const showDetailed = !!result
+    && (result.resultView || exam?.resultView) === 'detailed'
+    && !!result.answers && questions.length > 0;
 
   // Load exam
   useEffect(() => {
@@ -663,7 +667,7 @@ export default function ExamPage() {
       }
 
       // Question review (detailed mode only)
-      if (exam?.resultView === 'detailed' && result.answers && questions.length > 0) {
+      if (showDetailed) {
         ensurePage(20);
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(10);
@@ -708,7 +712,7 @@ export default function ExamPage() {
           doc.setTextColor(...(isCorrect ? [21,128,61] : [185,28,28]));
           doc.text(`Your answer: ${givenText}`, ML + 10, y);
           y += 4;
-          if (!isCorrect && det.correct) {
+          if (det.correct) {
             doc.setTextColor(21, 128, 61);
             const label = isShort ? 'Expected' : 'Correct';
             const val   = isShort ? det.correct : (correctOpt?.text || det.correct);
@@ -800,7 +804,7 @@ export default function ExamPage() {
           )}
 
           {/* Per-question review (detailed view) */}
-          {exam?.resultView === 'detailed' && result.answers && questions.length > 0 && (
+          {showDetailed && (
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
               <p className="text-sm font-semibold text-slate-700 mb-3">Question Review</p>
               <div className="space-y-3">
@@ -818,23 +822,23 @@ export default function ExamPage() {
                       <div className="flex items-start gap-2">
                         <span className="text-xs font-bold text-slate-400 shrink-0 mt-0.5">Q{i + 1}</span>
                         <p className="text-sm text-slate-800 leading-snug flex-1">{q.stem}</p>
-                        {isCorrect
-                          ? <CheckCircleIcon className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                          : <span className="text-red-500 shrink-0 mt-0.5 font-bold text-xs">✗</span>
-                        }
+                        <span className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white
+                          ${isCorrect ? 'bg-green-500' : 'bg-red-500'}`}>
+                          {isCorrect ? '✓' : '✗'}
+                        </span>
                       </div>
                       <div className="flex flex-wrap gap-2 pl-5 text-xs">
                         <span className={`px-2 py-0.5 rounded-full font-medium
                           ${isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                           Your answer: {isShort
                             ? (detail.given || '—')
-                            : (givenOpt?.text || detail.given || '—')}
+                            : (givenOpt ? `${givenOpt.letter}. ${givenOpt.text}` : (detail.given || '—'))}
                         </span>
-                        {!isCorrect && detail.correct && (
+                        {detail.correct && (
                           <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
                             {isShort ? 'Expected' : 'Correct'}: {isShort
                               ? detail.correct
-                              : (correctOpt?.text || detail.correct)}
+                              : (correctOpt ? `${correctOpt.letter}. ${correctOpt.text}` : detail.correct)}
                           </span>
                         )}
                       </div>
